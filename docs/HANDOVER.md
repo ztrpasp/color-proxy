@@ -7,8 +7,8 @@
 
 ## 1. 一句话现状
 
-基于共生网络（CoLoR）实现"无感知跨域 Web 获取"的新终端。**服务端（提供端）v1 最小功能已实现并通过本地测试**；
-消费端尚未实现；与真实 RM/BR 的端到端联调（S4）待在部署环境完成。
+基于共生网络（CoLoR）实现"无感知跨域 Web 获取"的新终端。**服务端（提供端）与消费端（请求端）v1 最小功能均已实现并通过本地测试**；
+与真实 RM/BR 的端到端联调（S4）待在部署环境完成。
 
 ---
 
@@ -37,9 +37,27 @@
 - 业务：向 RM 注册并处理同步、发布 Web 服务（ANN）、`handle_get`（隧道 DATA）、`handle_ack`（取 HTTP 请求）、`OriginWorker`（回源 + 响应 DATA）。
 - 业务闭环测试 `tests/stub_consumer.py` 通过（绕过原始套接字，用本地源站）。
 
+**已完成（消费端 v1，里程碑 M3）**
+- 新增 `colorproxy/consumer/` 子包（附加式，复用 `protocol`/`transport`/`registration`，未改服务端文件）：
+  HTTP 正向代理（默认 8910）→ 查本域 SID 表 → GET → 收隧道 DATA → 发 B=1 ACK(载 HTTP 请求) → 拼接响应 DATA 写回浏览器。
+- **SID 表来源：从 RM 拉取**（哨兵零 SID GET；只取回送 DATA 包头里的 SID，不耦合 RM 负载格式）。
+- 测试通过：`tests/test_consumer.py`（5/5：GET/ACK/哨兵 GET 字节布局、反向路径、SID 表登记）、
+  `tests/stub_provider.py`（域内闭环：浏览器→GET→隧道→ACK→响应→写回，`stub_consumer.py` 的镜像）。
+
 **未完成 / 待做**
-- **S4 端到端**：真实 RM + 跨域 BR + 管理员 + Npcap 环境下的联调与抓包验证。
-- **消费端**：浏览器侧 HTTP 正向代理（`docs/design-client-v1.md` 已定契约，未编码）。
+- **S4 端到端**：真实 RM + 跨域 BR + 管理员 + Npcap + 浏览器下的联调与抓包验证。
+  - 重点验证两项消费端 S4 假设：① 哨兵零 SID GET 能否触发 RM 回送本域 SID 列表（格式无文档）；
+    ② **跨域 PID 反向布局**——我方服务端把保留 PID(0) 追加在**尾部**（`messages.py`），消费端反向逻辑
+    收敛于 `consumer/messages.py:reverse_path_for_ack`（离线只测了域内空 PID 路径），需对照真实 BR 校准。
+  - **两个控制面缺口（真实 RM 下可能踩，对照 color-agent-plus/ColorMonitor.py:447-491）**：
+    ① **CONTROL tag=8（新代理通知）未处理**（提供端+消费端共用的 `registration.handle_control` 只认 tag=6）。
+       若 RM 仅在注册时同步域内代理表、对后加入者用 tag=8 增量通知，则先注册的一方学不到后注册方的
+       NID→IP。症状：提供端日志「无法确定回送地址」、消费端 504。**应急**：两端都起好后重启"先启动的那个"。
+    ② **本域 SID 表的真实下发可能是 CONTROL tag=40（裸 36B SID 列表）而非我实现的 DATA(r=1) 包头**。
+       这是加 `config-consumer.json` 静态 SID 预载（`sids`）的原因——数据面联调不被它卡住。确认 RM 形式后
+       可补：CONTROL Subtype=40 的 payload 每 36 字节切一个 SID 入表。
+- 端到端联调脚手架：`tools/origin_server.py`（测试源站）、`tests/test_e2e_inproc.py`（进程内贯通两端，
+  真 RM 前的最强离线保障）。运行方式见 README「运行」。
 - v2 演进：CoLoR 段可靠传输、HTTPS、请求分片、并发去复用、HMAC（若 BR 强制）。
 
 ---

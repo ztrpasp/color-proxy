@@ -1,0 +1,12 @@
+{
+  "nid": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+  "ipv4": "10.0.1.5",
+  "rm_ipv4": "10.0.0.1",
+  "proxy_port": 8910,
+  "sids": [
+    {
+      "url": "http://10.135.147.229:8000/hello.html",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    }
+  ]
+}
