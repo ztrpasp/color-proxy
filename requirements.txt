@@ -1,0 +1,5 @@
+# 运行依赖
+scapy>=2.5.0
+
+# Windows 还需单独安装 Npcap（https://npcap.com/），供 scapy 收发链路层报文。
+# 本服务端不依赖 cryptography / PyQt5 / opencv（已去除 ESS 加密与 GUI）。

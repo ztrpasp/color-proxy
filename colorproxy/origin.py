@@ -1,0 +1,139 @@
+"""回源与响应发送（state C / D）。
+
+每个 HTTP 请求由一个 ``OriginWorker`` 线程处理：对每个请求新建一条到真实
+Web 服务器的 TCP 连接，发送（规整后的）请求，读到连接关闭得到完整响应，
+再把响应按分片封装成 DATA 报文 best-effort 地发回消费端（无重传）。
+"""
+from __future__ import annotations
+
+import logging
+import socket
+import threading
+from urllib.parse import urlsplit
+
+from .config import ServiceConfig
+from .messages import build_data_packet
+from .protocol.constants import RESPONSE_CHIP_SIZE, LoadFlag, WebMsgType
+from .state import PendingTx, ProviderState
+from .transport.sender import ColorSender
+
+logger = logging.getLogger(__name__)
+
+#: 回源连接与读取的超时（秒）
+ORIGIN_TIMEOUT = 10.0
+#: 一些会改变连接语义、不应原样转发给源站的逐跳首部
+_HOP_BY_HOP_HEADERS = (b"connection", b"proxy-connection", b"keep-alive")
+
+
+class OriginWorker(threading.Thread):
+    """回源取响应并把响应发回消费端。"""
+
+    def __init__(
+        self,
+        state: ProviderState,
+        sender: ColorSender,
+        sid: str,
+        consumer_nid: int,
+        tx: PendingTx,
+        service: ServiceConfig,
+        http_request: bytes,
+    ) -> None:
+        super().__init__(name="OriginWorker", daemon=True)
+        self._state = state
+        self._sender = sender
+        self._sid = sid
+        self._consumer_nid = consumer_nid
+        self._tx = tx
+        self._service = service
+        self._http_request = http_request
+
+    def run(self) -> None:
+        response = self._fetch()
+        self._send_response(response)
+
+    # -- state C：回源 -------------------------------------------------
+
+    def _fetch(self) -> bytes:
+        host, port = self._service.origin_host, self._service.origin_port
+        request = _normalize_request(self._http_request, f"{host}:{port}")
+        try:
+            with socket.create_connection((host, port), timeout=ORIGIN_TIMEOUT) as conn:
+                conn.settimeout(ORIGIN_TIMEOUT)
+                conn.sendall(request)
+                chunks: list[bytes] = []
+                while True:
+                    chunk = conn.recv(65536)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+            return b"".join(chunks)
+        except OSError as exc:
+            logger.warning("回源失败 %s:%s：%s", host, port, exc)
+            return _bad_gateway(exc)
+
+    # -- state D：发送响应（best-effort，无重传） -----------------------
+
+    def _send_response(self, response: bytes) -> None:
+        chips = [response[i : i + RESPONSE_CHIP_SIZE]
+                 for i in range(0, len(response), RESPONSE_CHIP_SIZE)] or [b""]
+        for index, chip in enumerate(chips):
+            is_last = index == len(chips) - 1
+            flag = WebMsgType.HTTP_RESPONSE | (LoadFlag.LAST if is_last else 0)
+            packet = build_data_packet(
+                self._state.nid, self._sid, self._consumer_nid,
+                self._tx.pids, self._tx.seg_id, bytes([flag]) + chip,
+            )
+            self._sender.send(self._tx.return_ip, packet)
+        logger.info("已发回 HTTP 响应：SID=%s… 共 %d 片 / %d 字节",
+                    self._sid[:16], len(chips), len(response))
+
+
+def _normalize_request(raw_request: bytes, host_port: str) -> bytes:
+    """把转发来的 HTTP 请求规整为源站可直接处理的形式。
+
+    - 请求行的绝对 URI（``GET http://h/p``）改为源站形式（``GET /p``）
+    - 删除逐跳首部并强制 ``Connection: close``，确保源站读完即关闭
+    - 缺少 Host 首部时补齐
+    """
+    head, sep, body = raw_request.partition(b"\r\n\r\n")
+    lines = head.split(b"\r\n")
+    if not lines or not lines[0]:
+        return raw_request
+
+    request_line, header_lines = lines[0], lines[1:]
+    request_line, url_host = _to_origin_form(request_line)
+
+    kept = [line for line in header_lines
+            if line.split(b":", 1)[0].strip().lower() not in _HOP_BY_HOP_HEADERS]
+    if not any(line.split(b":", 1)[0].strip().lower() == b"host" for line in kept):
+        kept.append(b"Host: " + (url_host or host_port).encode("latin-1"))
+    kept.append(b"Connection: close")
+
+    return request_line + b"\r\n" + b"\r\n".join(kept) + (sep + body if sep else b"\r\n\r\n")
+
+
+def _to_origin_form(request_line: bytes) -> tuple[bytes, str | None]:
+    """请求行绝对 URI 转源站形式，返回 (新请求行, URL 中的 host 或 None)。"""
+    parts = request_line.split(b" ")
+    if len(parts) != 3:
+        return request_line, None
+    method, target, version = parts
+    lowered = target.lower()
+    if not (lowered.startswith(b"http://") or lowered.startswith(b"https://")):
+        return request_line, None
+    split = urlsplit(target.decode("latin-1"))
+    path = split.path or "/"
+    if split.query:
+        path += "?" + split.query
+    return method + b" " + path.encode("latin-1") + b" " + version, split.netloc
+
+
+def _bad_gateway(reason: object) -> bytes:
+    """源站不可达时合成 502 响应，避免浏览器一直等待。"""
+    body = f"502 Bad Gateway: {reason}".encode("utf-8")
+    return (
+        b"HTTP/1.1 502 Bad Gateway\r\n"
+        b"Content-Type: text/plain; charset=utf-8\r\n"
+        b"Content-Length: " + str(len(body)).encode("ascii") + b"\r\n"
+        b"Connection: close\r\n\r\n" + body
+    )

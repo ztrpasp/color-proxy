@@ -1,0 +1,12 @@
+{
+  "nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+  "ipv4": "10.135.147.229",
+  "rm_ipv4": "10.0.0.1",
+  "services": [
+    {
+      "url": "http://127.0.0.1:80",
+      "origin_host": "127.0.0.1",
+      "origin_port": 8000
+    }
+  ]
+}
