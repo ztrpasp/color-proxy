@@ -28,17 +28,19 @@ CONTROL_FIRST_BYTE = (COLOR_VERSION << 4) | PacketType.CONTROL    # 0x74
 
 
 class ControlSubtype(IntEnum):
-    """控制报文子类型（仅列出本服务端使用的两种）。"""
+    """控制报文子类型（仅列出本项目使用的几种）。"""
 
     PROXY_REGISTER = 5        # 终端 -> RM：代理注册
     PROXY_REGISTER_REPLY = 6  # RM -> 终端：下发域内 Proxy/BR 信息
+    SID_LIST_UPDATE = 40      # RM -> 终端：下发/更新本域可访问 SID 列表（裸 36B SID 拼接）
 
 
 # 各标识长度（字节）
 NID_LEN = 16   # 节点标识
 NSID_LEN = 16  # SID 的 NID 部分
 LSID_LEN = 20  # SID 的 Label 部分
-SID_HEX_LEN = (NSID_LEN + LSID_LEN) * 2  # SID 十六进制字符串长度 = 72
+SID_LEN = NSID_LEN + LSID_LEN            # 完整 SID 字节长度 = 36
+SID_HEX_LEN = SID_LEN * 2                # SID 十六进制字符串长度 = 72
 
 
 class LoadFlag(IntEnum):

@@ -46,16 +46,19 @@
 
 **未完成 / 待做**
 - **S4 端到端**：真实 RM + 跨域 BR + 管理员 + Npcap + 浏览器下的联调与抓包验证。
-  - 重点验证两项消费端 S4 假设：① 哨兵零 SID GET 能否触发 RM 回送本域 SID 列表（格式无文档）；
+  - 重点验证两项消费端 S4 假设：① 哨兵零 SID GET 能否触发 RM 回送本域 SID 列表（回送格式已查明并实现，见下方控制面缺口②；仅"RM 是否对该哨兵 GET 响应"待真机确认）；
     ② **跨域 PID 反向布局**——我方服务端把保留 PID(0) 追加在**尾部**（`messages.py`），消费端反向逻辑
     收敛于 `consumer/messages.py:reverse_path_for_ack`（离线只测了域内空 PID 路径），需对照真实 BR 校准。
   - **两个控制面缺口（真实 RM 下可能踩，对照 color-agent-plus/ColorMonitor.py:447-491）**：
     ① **CONTROL tag=8（新代理通知）未处理**（提供端+消费端共用的 `registration.handle_control` 只认 tag=6）。
        若 RM 仅在注册时同步域内代理表、对后加入者用 tag=8 增量通知，则先注册的一方学不到后注册方的
        NID→IP。症状：提供端日志「无法确定回送地址」、消费端 504。**应急**：两端都起好后重启"先启动的那个"。
-    ② **本域 SID 表的真实下发可能是 CONTROL tag=40（裸 36B SID 列表）而非我实现的 DATA(r=1) 包头**。
-       这是加 `config-consumer.json` 静态 SID 预载（`sids`）的原因——数据面联调不被它卡住。确认 RM 形式后
-       可补：CONTROL Subtype=40 的 payload 每 36 字节切一个 SID 入表。
+    ② ~~本域 SID 表的真实下发可能是 CONTROL tag=40 而非 DATA(r=1)~~ **【已修正】**：经对照参考实现
+       （`ColorMonitor.py:480-494`）确认 RM 确实用 **CONTROL(Subtype=40)** 一次性下发本域 SID 列表，
+       负载为裸的每 36 字节一个 SID 拼接。已实现：`protocol/control.py:is_sid_list/parse_sid_list`、
+       `consumer/sid_table.py:register_sid_list_control`，并在 `consumer.py:_on_payload` 的 CONTROL 分支登记；
+       原 DATA(r=1) 取 SID 的路已废（DATA r=1 实为"服务摘要"应答，需先发摘要 GET 才有，本端不取）。
+       `config-consumer.json` 的静态 SID 预载（`sids`）仍保留作离线/兜底。
 - 端到端联调脚手架：`tools/origin_server.py`（测试源站）、`tests/test_e2e_inproc.py`（进程内贯通两端，
   真 RM 前的最强离线保障）。运行方式见 README「运行」。
 - v2 演进：CoLoR 段可靠传输、HTTPS、请求分片、并发去复用、HMAC（若 BR 强制）。

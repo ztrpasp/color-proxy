@@ -65,7 +65,10 @@ class Consumer:
         first_byte = payload[0]
         try:
             if first_byte == CONTROL_FIRST_BYTE:
+                # 注册同步(Subtype=6) 与本域 SID 列表(Subtype=40) 都走 CONTROL，
+                # 各自按子类型自判，互不影响。
                 registration.handle_control(self.state, payload)
+                sid_table.register_sid_list_control(self.state, payload)
             elif not self.state.registered.is_set():
                 return  # 注册完成前忽略业务报文
             elif first_byte == DATA_FIRST_BYTE:

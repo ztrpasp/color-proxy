@@ -28,31 +28,38 @@ _ACK_FLAGS = _DATA_FLAG_ACK | _DATA_FLAG_SEGMENT  # 0x42
 _SENTINEL_SID = "0" * ((NSID_LEN + 20) * 2)
 
 
-def build_get(sid: str, consumer_nid: int, seg_id: int) -> ColorGet:
-    """构造一个 GET 报文（S=1、SegID=tx、无 payload、无 PID）。
+def build_get(sid: str, consumer_nid: int, seg_id: int | None) -> ColorGet:
+    """构造一个 GET 报文（无 payload、无 PID）。
 
     ``sid`` 为查表得到的完整 SID(72 hex)：N_sid→NSID(提供方)、L_sid→LSID。
     途经 RM/BR 时 PID 会被累积，消费端自身不填 PID。
+
+    ``seg_id`` 非 None 时置 S 标志并在 ``Segment_ID`` 放事务标识（提供端原样回带）；
+    为 None 时不置 S、不含 Segment_ID（哨兵 SID 列表请求用，与参考实现
+    ``download_SID_list_from_local_RM`` 的字节布局对齐）。
     """
     nsid, lsid = split_sid_hex(sid)
-    return ColorGet(
-        Flags=_GET_FLAGS,
-        NSID=nsid,
-        LSID=lsid,
-        NID=nid_to_bytes(consumer_nid),
-        Segment_ID=seg_id,
-        PID_List=[],
-    )
+    fields = {
+        "Flags": _GET_FLAGS if seg_id is not None else _GET_FLAG_ANSWER,
+        "NSID": nsid,
+        "LSID": lsid,
+        "NID": nid_to_bytes(consumer_nid),
+        "PID_List": [],
+    }
+    if seg_id is not None:
+        fields["Segment_ID"] = seg_id
+    return ColorGet(**fields)
 
 
-def build_sid_list_request(consumer_nid: int, seg_id: int) -> ColorGet:
-    """构造拉取本域 SID 列表的哨兵 GET（NSID/LSID 全零）。
+def build_sid_list_request(consumer_nid: int) -> ColorGet:
+    """构造拉取本域 SID 列表的哨兵 GET（NSID/LSID 全零、A=1、S=0、r=0）。
 
     参考实现以 ``Get('0'*36, 2)`` 向本域 RM 请求 SID 列表
-    （color-agent-plus/src/Frontend/sidListWindow.py:124-127）。RM 的触发条件
-    与回送格式无文档，需 S4 真实环境验证。
+    （color-agent-plus/src/Frontend/sidListWindow.py:124-126）。其中 ``'0'*36``
+    长度不匹配 GetPkt 的 72/32/40 任何分支，故 N_sid/L_sid 均留 -1、packing 时
+    写成全零 NSID(16)+LSID(20)——与此处全零哨兵字节一致。
     """
-    return build_get(_SENTINEL_SID, consumer_nid, seg_id)
+    return build_get(_SENTINEL_SID, consumer_nid, seg_id=None)
 
 
 def build_ack(

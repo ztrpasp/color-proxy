@@ -1,16 +1,17 @@
 """CONTROL 控制报文的手工编解码。
 
-仅实现本服务端需要的两种子类型：
+实现本项目需要的子类型：
 - 注册请求（Subtype=5）：终端 -> RM
 - 域内同步（Subtype=6）：RM -> 终端，下发 Proxy/BR 信息
+- SID 列表（Subtype=40）：RM -> 终端，下发本域可访问 SID 列表（消费端用）
 
 不复用 packets.py 中的声明式定义，因为 RM 同步表中条目的字段次序
 （NID 在前、IP 在后）与请求报文的 IP_NID 次序不一致，手工编解码更清晰可靠。
-报文布局对照 color-agent-plus 的 ProxyLib.ControlPkt。
+报文布局对照 color-agent-plus 的 ProxyLib.ControlPkt（tag=40 见 ColorMonitor.py:480-494）。
 """
 from __future__ import annotations
 
-from .constants import COLOR_VERSION, CONTROL_FIRST_BYTE, ControlSubtype, NID_LEN
+from .constants import COLOR_VERSION, CONTROL_FIRST_BYTE, ControlSubtype, NID_LEN, SID_LEN
 from .utils import (
     calculate_checksum,
     int_to_bytes_be,
@@ -78,3 +79,27 @@ def is_register_reply(payload: bytes) -> bool:
     if payload[0] != CONTROL_FIRST_BYTE or payload[5] != ControlSubtype.PROXY_REGISTER_REPLY:
         return False
     return calculate_checksum(payload) == 0
+
+
+def is_sid_list(payload: bytes) -> bool:
+    """判断是否为合法的 RM 本域 SID 列表报文（Subtype=40 且校验和正确）。"""
+    if len(payload) < CONTROL_HEADER_LENGTH:
+        return False
+    if payload[0] != CONTROL_FIRST_BYTE or payload[5] != ControlSubtype.SID_LIST_UPDATE:
+        return False
+    return calculate_checksum(payload) == 0
+
+
+def parse_sid_list(payload: bytes) -> list[str]:
+    """解析 RM 本域 SID 列表报文（Subtype=40），返回完整 SID(72 hex) 列表。
+
+    负载为裸的 SID 拼接，每 ``SID_LEN`` (36) 字节一个完整 SID（NSID‖LSID），
+    按 ``Data_Length``(bytes 6-7 小端) 取负载范围、整 36 字节切分，末尾不足一个
+    SID 的残余忽略。对照 color-agent-plus/ColorMonitor.py:484-487。
+    """
+    data_length = int.from_bytes(payload[6:8], "little")
+    data = payload[CONTROL_HEADER_LENGTH : CONTROL_HEADER_LENGTH + data_length]
+    return [
+        data[off : off + SID_LEN].hex()
+        for off in range(0, len(data) - SID_LEN + 1, SID_LEN)
+    ]

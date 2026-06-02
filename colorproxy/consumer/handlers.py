@@ -1,7 +1,8 @@
-"""处理收到的 DATA 报文（消费端侧握手的两步 + RM 的 SID 列表回送）。
+"""处理收到的 DATA 报文（消费端侧握手的两步）。
 
 分发判据（对照 color-agent-plus/src/Frontend/ColorMonitor.py:224-228,390-406）：
-- 小写 ``r`` 标志置位 → RM 回送的 SID 列表条目（交 sid_table 登记）。
+- 小写 ``r`` 标志置位 → RM 的服务摘要应答(DATA r=1)；本消费端不取摘要，忽略。
+  （本域 SID 列表是 RM 用 CONTROL(Subtype=40) 下发的，见 consumer.sid_table。）
 - ``r`` 未置位 → 握手/响应 DATA，按 ``load[0]`` 的 WebMsgType 细分：
   - TUNNEL        → 提取 PID、定回址，置 tunnel 事件（state A 的回应）。
   - HTTP_RESPONSE → 按到达序拼接分片，遇 LAST 置 response 事件（state D）。
@@ -14,7 +15,6 @@ from ..protocol.constants import LoadFlag, WEB_MSG_TYPE_MASK, WebMsgType
 from ..protocol.packets import ColorData
 from ..protocol.sid import sid_hex_from_packet
 from ..protocol.utils import verify_checksum
-from . import sid_table
 from .messages import reverse_path_for_ack
 from .state import ConsumerState
 
@@ -29,8 +29,7 @@ def handle_data(state: ConsumerState, payload: bytes) -> None:
     data = ColorData(payload)
     if data.Flags.B:  # B=1 ACK 是消费端发出的，不应在此接收
         return
-    if data.Flags.r:  # RM 回送的本域 SID 列表条目
-        sid_table.handle_sid_list_entry(state, data)
+    if data.Flags.r:  # RM 的服务摘要应答(DATA r=1)；本消费端不取摘要，忽略
         return
 
     load = bytes(data.payload)
