@@ -51,10 +51,11 @@ def _handle_tunnel(state: ConsumerState, data: ColorData) -> None:
         return
 
     recv_pids = list(data.PID_List)
-    if data.Flags.R and recv_pids:
-        # 跨域：下一跳为消费端侧边界路由器（取首个真实 PID 的高 16 位作 PX）。
-        # 跨域 PID 布局需 S4 验证，见 messages.reverse_path_for_ack 注释。
-        return_ip = state.resolve_px_ip(recv_pids[0] >> 16)
+    if data.Flags.R:
+        # 跨域：BR 入域时把保留/返回 PID 放在 PID 列**首位**，其后才是真实反向路径。
+        # 下一跳 PX 取首个真实 PID(recv_pids[1]) 的高 16 位（对齐参考实现
+        # ColorMonitor.py:248 的 PIDs[1] >> 16；与 reverse_path_for_ack 的剥离一致）。
+        return_ip = state.resolve_px_ip(recv_pids[1] >> 16) if len(recv_pids) >= 2 else None
     else:
         # 域内：下一跳为提供方代理（提供方 NID = SID 的 N_sid）。
         provider_nid = int.from_bytes(bytes(data.NSID), "big")

@@ -11,7 +11,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from colorproxy.consumer import sid_table
+from scapy.packet import Raw
+
+from colorproxy.consumer import handlers, sid_table
 from colorproxy.consumer.config import ConsumerConfig
 from colorproxy.consumer.messages import (
     build_ack,
@@ -29,7 +31,12 @@ from colorproxy.protocol.constants import (
     WebMsgType,
 )
 from colorproxy.protocol.packets import ColorData, ColorGet
-from colorproxy.protocol.sid import lsid_from_url, nid_to_bytes, sid_hex_from_url
+from colorproxy.protocol.sid import (
+    lsid_from_url,
+    nid_to_bytes,
+    sid_hex_from_url,
+    split_sid_hex,
+)
 from colorproxy.protocol.utils import (
     calculate_checksum,
     int_to_bytes_be,
@@ -86,9 +93,41 @@ def test_build_ack_carries_two_nids_and_request():
 
 
 def test_reverse_path_for_ack():
-    assert reverse_path_for_ack([]) == []                       # 域内
-    assert reverse_path_for_ack([0x11, 0x22, 0]) == [0x22, 0x11]  # 去尾部保留位后反向
-    assert reverse_path_for_ack([0x11, 0x22]) == [0x22, 0x11]
+    assert reverse_path_for_ack([]) == []                       # 域内：空
+    # 跨域：首位为 BR 入域保留/返回 PID，剥离后其余反向
+    assert reverse_path_for_ack([0xAA, 0x11, 0x22]) == [0x22, 0x11]
+    assert reverse_path_for_ack([0xAA, 0x11]) == [0x11]
+
+
+def _build_cross_domain_tunnel(pid_list: list[int]) -> bytes:
+    """构造一个跨域隧道 DATA（B=0,R=1,载 TUNNEL）：模拟经真实 BR 反向路由后到达消费端。
+
+    ``pid_list`` 即消费端收到的完整 PID 列（首位为 BR 入域保留/返回 PID）。
+    """
+    nsid, lsid = split_sid_hex(SID)
+    tunnel = ColorData(
+        Flags=0x22,  # R(0x20)|S(0x02)，B=0
+        NSID=nsid,
+        LSID=lsid,
+        Destination_NID=nid_to_bytes(CONSUMER_NID),
+        Source_NID=nid_to_bytes(PROVIDER_NID),  # B=0,R=1 时在线
+        Segment_ID=7,
+        PID_List=pid_list,
+    ) / Raw(bytes([WebMsgType.TUNNEL | LoadFlag.LAST]))
+    return bytes(tunnel)
+
+
+def test_tunnel_cross_domain_sets_return_ip_and_reverse_pids():
+    state = _consumer_state()
+    state.set_domain_info(proxies=[], brs=[(0x00AB, "10.0.0.9")])  # PX -> BR IP
+    pending = state.new_pending(SID, CONSUMER_NID)
+
+    reserved, p1, p2 = 0xDEAD0000, 0x00AB1111, 0x00CD2222  # 首位保留 + 两个真实 PID
+    handlers.handle_data(state, _build_cross_domain_tunnel([reserved, p1, p2]))
+
+    assert pending.tunnel_event.is_set()
+    assert pending.return_ip == "10.0.0.9"   # 取 recv_pids[1]=p1 的高 16 位 0x00AB 解析
+    assert pending.pids == [p2, p1]          # recv_pids[1:][::-1]，不含首位保留 PID
 
 
 def _build_sid_list_control(sids: list[str]) -> bytes:

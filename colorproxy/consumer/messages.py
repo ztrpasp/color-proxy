@@ -95,15 +95,14 @@ def reverse_path_for_ack(recv_pids: list[int]) -> list[int]:
     """由隧道 DATA 带回的 PID 序列推出 ACK 的反向路径 PID 序列。
 
     - 域内（``recv_pids`` 为空）→ 空（ACK 不带 PID、R=0）。
-    - 跨域 → 去掉服务端在尾部追加的保留 PID(0)，再反向。
+    - 跨域 → 去掉 BR 在入域时置于**首位**的保留/返回 PID（``recv_pids[0]``），
+      其余按到达序反向，即 ``recv_pids[1:][::-1]``。
 
-    跨域 PID 布局（保留位位置、是否需再追加保留位、BR 对反向路径的具体要求）
-    需在 S4 真实 RM/BR 环境验证。对照：
-      - 我方服务端尾部追加保留位：colorproxy/messages.py build_data_packet
-      - 参考实现反向约定 ``RecvDataPkt.PIDs[1:][::-1]``：
-        color-agent-plus/src/Frontend/ColorMonitor.py:224,290-296,385-389
+    注意保留位的位置：服务端在隧道 DATA 的 PID 列**尾部**追加保留位(0)（见
+    colorproxy/messages.py build_data_packet，对齐参考实现 DataPkt B=0/R=1）。
+    但 DATA 经真实 BR 反向路由后，消费端收到的 PID 列**首位**才是 BR 入域校验
+    （verify_pid_inbound）所用的保留/返回 PID——故按首位（而非尾部）剥离。
+    对齐参考实现 ``RecvDataPkt.PIDs[1:][::-1]``：
+    color-agent-plus/src/Frontend/ColorMonitor.py:224,290-296,385-389。
     """
-    if not recv_pids:
-        return []
-    real = recv_pids[:-1] if recv_pids[-1] == 0 else list(recv_pids)
-    return real[::-1]
+    return recv_pids[1:][::-1]

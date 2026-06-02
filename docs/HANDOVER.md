@@ -47,8 +47,13 @@
 **未完成 / 待做**
 - **S4 端到端**：真实 RM + 跨域 BR + 管理员 + Npcap + 浏览器下的联调与抓包验证。
   - 重点验证两项消费端 S4 假设：① 哨兵零 SID GET 能否触发 RM 回送本域 SID 列表（回送格式已查明并实现，见下方控制面缺口②；仅"RM 是否对该哨兵 GET 响应"待真机确认）；
-    ② **跨域 PID 反向布局**——我方服务端把保留 PID(0) 追加在**尾部**（`messages.py`），消费端反向逻辑
-    收敛于 `consumer/messages.py:reverse_path_for_ack`（离线只测了域内空 PID 路径），需对照真实 BR 校准。
+    ② ~~跨域 PID 反向布局待校准~~ **【已修正】**：S4 联调中 ACK 被 BR 以 `verify_pid_inbound failed`
+    丢弃，对照参考实现 `ColorMonitor.py:224,248,290-296` 定位为消费端反向 PID 取法错误。修正：DATA 经真实
+    BR 反向路由后，消费端收到的 PID 列**首位**是 BR 入域校验用的保留/返回 PID，故下一跳 PX 取 `recv_pids[1]>>16`、
+    ACK 反向路径取 `recv_pids[1:][::-1]`（原实现误按"尾部保留位"剥离且用了 `recv_pids[0]`）。改在
+    `consumer/handlers.py:_handle_tunnel` 与 `consumer/messages.py:reverse_path_for_ack`，回归见
+    `tests/test_consumer.py:test_tunnel_cross_domain_sets_return_ip_and_reverse_pids`。服务端尾部追加保留位
+    （`messages.py build_data_packet`）与参考 DataPkt(B=0/R=1) 一致，无需改。
   - **两个控制面缺口（真实 RM 下可能踩，对照 color-agent-plus/ColorMonitor.py:447-491）**：
     ① **CONTROL tag=8（新代理通知）未处理**（提供端+消费端共用的 `registration.handle_control` 只认 tag=6）。
        若 RM 仅在注册时同步域内代理表、对后加入者用 tag=8 增量通知，则先注册的一方学不到后注册方的
