@@ -5,7 +5,7 @@ import logging
 
 from .messages import build_data_packet
 from .origin import OriginWorker
-from .protocol.constants import LoadFlag, WEB_MSG_TYPE_MASK, WebMsgType
+from .protocol.constants import LoadFlag, WebMsgType
 from .protocol.packets import ColorData, ColorGet
 from .protocol.sid import sid_hex_from_packet
 from .protocol.utils import verify_checksum
@@ -43,18 +43,33 @@ def handle_get(state: ProviderState, sender: ColorSender, payload: bytes) -> Non
 
 
 def handle_ack(state: ProviderState, sender: ColorSender, payload: bytes) -> None:
-    """state B：收到携带 HTTP 请求的 ACK(B=1) → 取出请求 → 起回源 worker。"""
+    """state B：收到携带 HTTP 请求的 ACK(B=1) → 取出请求 → 起回源 worker。
+
+    负载放行从宽：**不再校验 ``load[0]`` 的 WebMsgType 位**，默认整条 ACK 即承载
+    HTTP 请求（``http_request = load[1:]``）；``load[0]`` 仅用于读取 LAST 标志做日志/
+    分片提示。v1 假设请求单包装下，故非末片(LAST=0)也照常放行，仅告警。
+    """
     header_length = payload[6]
+    logger.info("收到 ACK(B=1)：共 %d 字节，包头 %d 字节", len(payload), header_length)
     if not verify_checksum(payload[:header_length]):
+        logger.warning("ACK 包头校验和不通过，丢弃")
         return
     ack = ColorData(payload)
     sid = sid_hex_from_packet(bytes(ack.NSID), bytes(ack.LSID))
     consumer_nid = int.from_bytes(bytes(ack.Source_NID), "big")  # B=1：第二个 NID 为消费端
 
     load = bytes(ack.payload)
-    if not load or (load[0] & WEB_MSG_TYPE_MASK) != WebMsgType.HTTP_REQUEST:
+    if not load:
+        logger.warning("ACK 负载为空，丢弃：SID=%s…", sid[:16])
         return
-    http_request = load[1:]
+    is_last = bool(load[0] & LoadFlag.LAST)
+    http_request = load[1:]  # 默认即 HTTP 请求，不再按 load[0] 的类型位判别
+    logger.info(
+        "ACK 解析：SID=%s… 消费端=%032x load[0]=0x%02x 末片=%s HTTP请求=%d字节",
+        sid[:16], consumer_nid, load[0], is_last, len(http_request),
+    )
+    if not is_last:
+        logger.warning("ACK 非末片(LAST=0)，v1 按单包处理仍放行：SID=%s…", sid[:16])
 
     tx = state.pop_pending(sid, consumer_nid)
     if tx is None:
@@ -62,6 +77,8 @@ def handle_ack(state: ProviderState, sender: ColorSender, payload: bytes) -> Non
         return
     service = state.get_service(sid)
     if service is None:
+        logger.warning("收到 ACK 但 SID 未发布服务，忽略：SID=%s…", sid[:16])
         return
 
     OriginWorker(state, sender, sid, consumer_nid, tx, service, http_request).start()
+    logger.info("已起回源 worker 处理请求：SID=%s…", sid[:16])

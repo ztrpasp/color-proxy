@@ -91,6 +91,19 @@ def test_handle_ack_domain_internal_restores_http_request():
     assert captured.get("req") == http
 
 
+def test_handle_ack_passes_through_regardless_of_load_type():
+    """宽松放行：不再按 load[0] 的 WebMsgType 位判类型，任意 load[0] 仍当 HTTP 请求还原。"""
+    state = _provider_state_with_service()
+    state.put_pending(SID, CONSUMER_NID, PendingTx("10.0.1.5", [], 7, False))
+
+    http = b"GET http://prov.local/hello.html HTTP/1.1\r\nHost: prov.local\r\n\r\n"
+    raw = bytearray(bytes(build_ack(SID, CONSUMER_NID, [], 7, http)))
+    raw[raw[6]] = 0x00  # 负载首字节(偏移 Header_Length) 的类型/LAST 位全清零
+
+    captured = _capture_handle_ack(state, bytes(raw))
+    assert captured.get("req") == http  # 类型位非 HTTP_REQUEST、且非末片，仍完整还原放行
+
+
 def test_handle_ack_without_pending_is_ignored():
     state = _provider_state_with_service()  # 有服务但无未决事务
     http = b"GET http://prov.local/hello.html HTTP/1.1\r\n\r\n"
