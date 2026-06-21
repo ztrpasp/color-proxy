@@ -19,6 +19,7 @@ class PendingTx:
     pids: list[int]       # GET 携带的 PID 序列（回送时原样使用）
     seg_id: int           # 事务标识（来自 GET 的 SegID，原样回带）
     cross_domain: bool    # 是否跨域（pids 非空）
+    random_num: bytes | None = None  # GET 携带的 4 字节 Random_Num，作回送 DATA 的 HMAC 种子
 
 
 class ProviderState:

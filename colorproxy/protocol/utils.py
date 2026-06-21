@@ -1,6 +1,17 @@
 """CoLoR 报文通用编解码工具。"""
 from __future__ import annotations
 
+import hashlib
+
+
+def calc_hmac(data: bytes) -> bytes:
+    """对 data 求 MD5，返回完整 16 字节摘要（HMAC 字段取其末 4 字节）。
+
+    对照参考实现 color-agent-plus 的 CalcHMAC：无密钥的 MD5，仅作完整性校验。
+    标准库 hashlib.md5 与参考实现所用 cryptography MD5 结果完全一致。
+    """
+    return hashlib.md5(data).digest()
+
 
 def calculate_checksum(data: bytes) -> int:
     """计算 CoLoR 16 位反码和校验和。

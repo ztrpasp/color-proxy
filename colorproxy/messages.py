@@ -16,6 +16,7 @@ _B_FLAG_MASK = 0x40
 # DATA 报文 Flags 各位（名称顺序 "rSCQMRBF"，低位在前）。
 # 注意：必须在构造时整体赋值 Flags，不能用 pkt.Flags.X = True（scapy 会跨实例共享该可变值）。
 _FLAG_SEGMENT_ID = 0x02  # S：含 Segment_ID
+_FLAG_HMAC = 0x04  # C：含 HMAC（bit2）
 _FLAG_REVERSE_PATH = 0x20  # R：跨域/反向路径
 
 
@@ -31,16 +32,21 @@ def build_data_packet(
     pids: list[int],
     seg_id: int,
     load: bytes,
+    hmac_seed: bytes | None = None,
 ) -> ColorData:
     """构造一个发往消费端的 DATA 报文（B=0）。
 
     - 跨域（``pids`` 非空）：置 R=1，带 Source_NID(本机) 与 ``pids + [保留 0]``
     - 域内（``pids`` 为空）：R=0，无 Source_NID 与 PID 列表
+    - ``hmac_seed`` 非 None（即 GET 携带的 4 字节 Random_Num）：置 C=1，把种子放进
+      ``HMAC`` 字段，``ColorData.post_build`` 会据此重算 HMAC，以通过 BR 的 HMAC 校验。
 
     回送路径处理对照 ColorMonitor.SendingThread 的发送逻辑。
     """
     nsid, lsid = split_sid_hex(sid)
     flags = _FLAG_SEGMENT_ID | (_FLAG_REVERSE_PATH if pids else 0)
+    if hmac_seed is not None:
+        flags |= _FLAG_HMAC
     fields = {
         "Flags": flags,
         "NSID": nsid,
@@ -51,4 +57,6 @@ def build_data_packet(
     if pids:  # 跨域：带 Source_NID(本机) 与 PID 序列（末尾追加保留 PID）
         fields["Source_NID"] = nid_to_bytes(provider_nid)
         fields["PID_List"] = list(pids) + [0]
+    if hmac_seed is not None:  # 放入 4 字节 Random_Num，post_build 会重算覆盖
+        fields["HMAC"] = hmac_seed
     return ColorData(**fields) / Raw(load)

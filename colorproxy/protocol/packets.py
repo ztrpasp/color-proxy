@@ -30,7 +30,7 @@ from scapy.fields import (
 from scapy.packet import Packet
 
 from .constants import COLOR_VERSION, PacketType
-from .utils import calculate_checksum, int_to_bytes_be, int_to_bytes_le
+from .utils import calc_hmac, calculate_checksum, int_to_bytes_be, int_to_bytes_le
 
 # DATA 报文标志位顺序（低位在前），与参考实现 (F<<7|B<<6|R<<5|M<<4|Q<<3|C<<2|S<<1|r) 一致
 _DATA_FLAGS = "rSCQMRBF"
@@ -136,6 +136,24 @@ class ColorData(Packet):
             pkt = pkt[:7] + int_to_bytes_be(pid_pointer, 1) + pkt[8:]
         if self.Packet_Length is None:
             pkt = pkt[:2] + int_to_bytes_le(len(pkt) + len(pay), 2) + pkt[4:]
+        if self.Flags.C:
+            # C 置位时重算 HMAC（MD5 取末 4 字节），种子为此前置于 HMAC 字段的 Random_Num。
+            # 算法/偏移对照参考实现 color-agent-plus CoLoRpacket.ColorData.post_build。
+            # 必须在校验和之前计算，使校验和覆盖最终 HMAC 字节。
+            has_source_nid = bool(self.Flags.R) and not bool(self.Flags.B)
+            hmac_start = 10 + 2 * (1 if self.Flags.M else 0)
+            hmac_offset = 62 + 2 * (1 if self.Flags.M else 0) + 16 * (1 if has_source_nid else 0)
+            if self.Flags.Q:
+                hmac_offset += self.QoS_Length + 1
+            seed = (
+                pkt[hmac_start:hmac_offset]
+                + b"\x00\x00\x00\x00"
+                + pkt[hmac_offset + 4:]
+                + pay
+                + pkt[hmac_offset:hmac_offset + 4]  # 当前存放的是 Random_Num 种子
+            )
+            digest = calc_hmac(seed)[-4:]
+            pkt = pkt[:hmac_offset] + digest + pkt[hmac_offset + 4:]
         if self.Checksum is None:
             # DATA 校验和仅覆盖包头，不含负载
             pkt = pkt[:4] + int_to_bytes_be(calculate_checksum(pkt), 2) + pkt[6:]

@@ -82,6 +82,7 @@ class OriginWorker(threading.Thread):
             packet = build_data_packet(
                 self._state.nid, self._sid, self._consumer_nid,
                 self._tx.pids, self._tx.seg_id, bytes([flag]) + chip,
+                hmac_seed=self._tx.random_num,
             )
             self._sender.send(self._tx.return_ip, packet)
         logger.info("已发回 HTTP 响应：SID=%s… 共 %d 片 / %d 字节",

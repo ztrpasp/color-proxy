@@ -28,16 +28,19 @@ def handle_get(state: ProviderState, sender: ColorSender, payload: bytes) -> Non
     consumer_nid = int.from_bytes(bytes(get.NID), "big")
     pids = list(get.PID_List)
     seg_id = int(get.Segment_ID) if get.Flags.S else 0
+    # RM/BR 转发 GET 时置 R=1 并加 4 字节 Random_Num（一次性 nonce），作回送 DATA 的 HMAC 种子。
+    random_num = bytes(get.Random_Num) if get.Flags.R else None
+    logger.info("GET 携带 Random_Num=%s", random_num.hex() if random_num else "无")
 
     return_ip = state.resolve_return_ip(consumer_nid, pids)
     if return_ip is None:
         logger.warning("无法确定回送地址（域内/跨域均未命中），忽略 GET")
         return
 
-    state.put_pending(sid, consumer_nid, PendingTx(return_ip, pids, seg_id, bool(pids)))
+    state.put_pending(sid, consumer_nid, PendingTx(return_ip, pids, seg_id, bool(pids), random_num))
 
     tunnel_load = bytes([WebMsgType.TUNNEL | LoadFlag.LAST])
-    tunnel = build_data_packet(state.nid, sid, consumer_nid, pids, seg_id, tunnel_load)
+    tunnel = build_data_packet(state.nid, sid, consumer_nid, pids, seg_id, tunnel_load, hmac_seed=random_num)
     sender.send(return_ip, tunnel)
     logger.info("已回送隧道 DATA：SID=%s… 回址=%s", sid[:16], return_ip)
 
