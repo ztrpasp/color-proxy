@@ -56,6 +56,15 @@ def test_sid_from_url_is_72_hex():
     assert lsid == sid.lsid_from_url("http://prov.local/hello.html")
 
 
+def test_lsid_ignores_query_but_distinguishes_path():
+    """计算 SID 时去 query/fragment：同 path 不同查询参数命中同一 L_sid。"""
+    base = sid.lsid_from_url("http://prov.local/api/items")
+    assert sid.lsid_from_url("http://prov.local/api/items?id=1") == base
+    assert sid.lsid_from_url("http://prov.local/api/items?id=2&x=y") == base
+    assert sid.lsid_from_url("http://prov.local/api/items#frag") == base
+    assert sid.lsid_from_url("http://prov.local/api/other") != base  # path 仍区分
+
+
 def _build_data_b0_r1(load: bytes, pids):
     cd = ColorData(
         Flags=_DATA_R | _DATA_S,

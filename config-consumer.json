@@ -7,6 +7,18 @@
     {
       "url": "http://10.135.147.229:8000/hello.html",
       "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://10.135.147.229:8000/showcase.html",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://10.135.147.229:8000/items.html",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://10.135.147.229:8000/api/items",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
     }
   ]
 }

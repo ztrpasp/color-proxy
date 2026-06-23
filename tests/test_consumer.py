@@ -162,6 +162,16 @@ def test_sid_list_control_populates_table_and_skips_sentinel():
     assert state.sid_count() == 2  # 全零哨兵被跳过
 
 
+def test_lookup_by_url_ignores_query():
+    """带 query 的 URL 仍按去 query 的 path 命中同一 SID（query 不入 SID）。"""
+    state = _consumer_state()
+    state.add_sid(SID)  # SID 由不含 query 的 URL 计算
+    assert state.lookup_by_url(URL) == SID
+    assert state.lookup_by_url(URL + "?a=1&b=2") == SID
+    assert state.lookup_by_url(URL + "#frag") == SID
+    assert state.lookup_by_url("http://prov.local/other") is None  # path 不同不命中
+
+
 def test_register_reply_is_not_treated_as_sid_list():
     # 注册同步(Subtype=6) 不应被 SID 列表登记误吃
     reply_subtype_pkt = _build_sid_list_control([SID])

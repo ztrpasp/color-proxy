@@ -79,7 +79,7 @@ class ConsumerState:
             self._sid_table[sid_hex[NSID_LEN * 2:]] = sid_hex
 
     def lookup_by_url(self, url: str) -> str | None:
-        """按 ``L_sid = SHA1(url)`` 在本域 SID 表中查完整 SID。"""
+        """按 ``L_sid = SHA1(去 query 后 url)`` 在本域 SID 表中查完整 SID。"""
         lsid_hex = lsid_from_url(url).hex()
         with self._lock:
             return self._sid_table.get(lsid_hex)

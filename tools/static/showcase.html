@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CoLoR Proxy · 跨域取回展示页</title>
+<style>
+  :root{
+    --bg:#0b1021; --panel:#141a33; --line:#26304f;
+    --ink:#e8ecff; --muted:#9aa6d4; --brand:#6ea8ff; --brand2:#9b7bff; --ok:#46e0a8;
+    --mono:ui-monospace,SFMono-Regular,"Cascadia Code",Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; color:var(--ink); background:
+      radial-gradient(1200px 600px at 15% -10%, #1b2547 0, transparent 60%),
+      radial-gradient(900px 500px at 110% 10%, #2a1c4a 0, transparent 55%), var(--bg);
+    font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue","PingFang SC","Microsoft YaHei",sans-serif;
+  }
+  .wrap{max-width:960px; margin:0 auto; padding:48px 24px 72px}
+  .badge{display:inline-flex; gap:8px; align-items:center; padding:6px 14px; border:1px solid var(--line);
+    border-radius:999px; color:var(--muted); font-size:13px; background:rgba(255,255,255,.02)}
+  .dot{width:8px; height:8px; border-radius:50%; background:var(--ok); box-shadow:0 0 12px var(--ok)}
+  h1{font-size:clamp(30px,5vw,46px); line-height:1.1; margin:20px 0 10px; letter-spacing:-.02em}
+  h1 .grad{background:linear-gradient(100deg,var(--brand),var(--brand2)); -webkit-background-clip:text;
+    background-clip:text; color:transparent}
+  .lead{color:var(--muted); font-size:18px; max-width:640px}
+  .grid{display:grid; gap:18px; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); margin:34px 0}
+  .card{background:linear-gradient(180deg,var(--panel),#10162c); border:1px solid var(--line);
+    border-radius:16px; padding:20px}
+  .card h3{margin:0 0 6px; font-size:15px; color:var(--brand)}
+  .card p{margin:0; color:var(--muted); font-size:14px}
+  .panel{background:var(--panel); border:1px solid var(--line); border-radius:18px; padding:26px; margin:26px 0}
+  .panel h2{margin:0 0 4px; font-size:22px}
+  .panel .sub{color:var(--muted); margin:0 0 18px; font-size:14px}
+  svg{width:100%; height:auto; display:block}
+  table{width:100%; border-collapse:collapse; font-size:14px}
+  th,td{text-align:left; padding:11px 12px; border-bottom:1px solid var(--line)}
+  th{color:var(--muted); font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.06em}
+  code{font-family:var(--mono); color:var(--ink); background:rgba(110,168,255,.12);
+    padding:2px 7px; border-radius:6px; font-size:13px}
+  .m{font-family:var(--mono); font-weight:700}
+  .m.get{color:var(--brand)} .m.post{color:var(--ok)} .m.put{color:#ffd166} .m.del{color:#ff7a93}
+  footer{color:var(--muted); font-size:13px; text-align:center; margin-top:40px}
+  footer code{background:transparent; padding:0; color:var(--brand)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <span class="badge"><span class="dot"></span> 经共生网络（CoLoR）跨域取回 · 链路已打通</span>
+  <h1>CoLoR <span class="grad">正向代理</span><br>跨域 Web 取回展示页</h1>
+  <p class="lead">这一页比 <code>hello.html</code> 大得多——它会被切成多个 1200 字节的
+    DATA 分片在网络中传输，再到消费端按序重组。你现在能完整看到它，就说明
+    <strong>分片传输与重组</strong>工作正常。</p>
+
+  <div class="grid">
+    <div class="card"><h3>① 先拉</h3><p>浏览器请求被消费端拦下，转成 CoLoR <code>GET</code> 发往 RM。</p></div>
+    <div class="card"><h3>② 建隧道</h3><p>提供端回送隧道 DATA，带回反向 PID 序列，确定回址。</p></div>
+    <div class="card"><h3>③ 后推</h3><p>消费端用 <code>ACK(B=1)</code> 把原始 HTTP 请求推给提供端回源。</p></div>
+    <div class="card"><h3>④ 回程</h3><p>响应按分片封进 DATA 发回，best-effort、无重传。</p></div>
+  </div>
+
+  <div class="panel">
+    <h2>握手流程</h2>
+    <p class="sub">GET → 隧道 DATA → ACK(载 HTTP 请求) → 响应 DATA（分片）</p>
+    <svg viewBox="0 0 720 150" role="img" aria-label="握手流程图">
+      <defs>
+        <linearGradient id="g" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0" stop-color="#6ea8ff"/><stop offset="1" stop-color="#9b7bff"/>
+        </linearGradient>
+        <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+          <path d="M0 0L10 5L0 10z" fill="url(#g)"/>
+        </marker>
+      </defs>
+      <g font-family="ui-monospace,monospace" font-size="13" fill="#e8ecff" text-anchor="middle">
+        <rect x="20" y="48" width="150" height="54" rx="12" fill="#141a33" stroke="#26304f"/>
+        <text x="95" y="72">浏览器</text><text x="95" y="90" fill="#9aa6d4">+ 消费端代理</text>
+        <rect x="285" y="48" width="150" height="54" rx="12" fill="#141a33" stroke="#26304f"/>
+        <text x="360" y="72">RM / BR</text><text x="360" y="90" fill="#9aa6d4">共生网络</text>
+        <rect x="550" y="48" width="150" height="54" rx="12" fill="#141a33" stroke="#26304f"/>
+        <text x="625" y="72">提供端</text><text x="625" y="90" fill="#9aa6d4">+ 源站回源</text>
+        <line x1="172" y1="64" x2="283" y2="64" stroke="url(#g)" stroke-width="2" marker-end="url(#a)"/>
+        <text x="227" y="56" font-size="11" fill="#9aa6d4">GET</text>
+        <line x1="437" y1="64" x2="548" y2="64" stroke="url(#g)" stroke-width="2" marker-end="url(#a)"/>
+        <text x="492" y="56" font-size="11" fill="#9aa6d4">ACK</text>
+        <line x1="548" y1="88" x2="174" y2="88" stroke="url(#g)" stroke-width="2" marker-end="url(#a)"/>
+        <text x="360" y="108" font-size="11" fill="#46e0a8">响应 DATA（多分片）</text>
+      </g>
+    </svg>
+  </div>
+
+  <div class="panel">
+    <h2>样例端点</h2>
+    <p class="sub">条目 id 走 query <code>?id=N</code>：增删改查共用 <code>/api/items</code> 一条 SID，
+      且 <code>?id=</code> 不入 SID、仍原样透传到源站。</p>
+    <table>
+      <thead><tr><th>方法</th><th>路径</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td><span class="m get">GET</span></td><td><code>/showcase.html</code></td><td>本页（跨多分片）</td></tr>
+        <tr><td><span class="m get">GET</span></td><td><code>/api/items</code></td><td>列出全部条目</td></tr>
+        <tr><td><span class="m get">GET</span></td><td><code>/api/items?id=N</code></td><td>取单条 / 404</td></tr>
+        <tr><td><span class="m post">POST</span></td><td><code>/api/items</code></td><td>JSON body 创建，返回 id</td></tr>
+        <tr><td><span class="m put">PUT</span></td><td><code>/api/items?id=N</code></td><td>覆盖更新 / 404</td></tr>
+        <tr><td><span class="m del">DELETE</span></td><td><code>/api/items?id=N</code></td><td>删除 / 404</td></tr>
+      </tbody>
+    </table>
+    <p style="margin:18px 0 0"><a href="/items.html"
+       style="display:inline-block;color:#0b1021;font-weight:600;text-decoration:none;padding:10px 18px;border-radius:10px;background:linear-gradient(100deg,#6ea8ff,#9b7bff)">
+       打开 /api/items 交互控制台 →</a></p>
+  </div>
+
+  <footer>本页完全自包含（内联 CSS 与 SVG，无任何外链资源）·
+    源站 <code>tools/origin_server.py</code> 提供 · CoLoR Proxy v1</footer>
+</div>
+</body>
+</html>

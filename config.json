@@ -7,6 +7,21 @@
       "url": "http://10.135.147.229:8000/hello.html",
       "origin_host": "127.0.0.1",
       "origin_port": 8000
+    },
+    {
+      "url": "http://10.135.147.229:8000/showcase.html",
+      "origin_host": "127.0.0.1",
+      "origin_port": 8000
+    },
+    {
+      "url": "http://10.135.147.229:8000/items.html",
+      "origin_host": "127.0.0.1",
+      "origin_port": 8000
+    },
+    {
+      "url": "http://10.135.147.229:8000/api/items",
+      "origin_host": "127.0.0.1",
+      "origin_port": 8000
     }
   ]
 }

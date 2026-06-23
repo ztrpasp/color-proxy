@@ -26,7 +26,7 @@ def publish_services(state: ProviderState, sender: ColorSender) -> None:
 
 
 def _build_announce(provider_nid: int, url: str) -> ColorAnnounce:
-    """构造仅含一个通告单元的 ANN 报文（N_sid=本机 NID，L_sid=SHA1(url)）。"""
+    """构造仅含一个通告单元的 ANN 报文（N_sid=本机 NID，L_sid=SHA1(去 query 后 url)）。"""
     nsid = nid_to_bytes(provider_nid)
     unit = AnnounceUnit(
         N=1, L=1, I=1, AM=_ANNOUNCE_ACTION_REGISTER,

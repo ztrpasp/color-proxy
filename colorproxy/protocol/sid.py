@@ -1,18 +1,29 @@
 """SID 的生成与表示。
 
-SID = N_sid(提供方 NID, 16 字节) ‖ L_sid(完整 URL 的 SHA1, 20 字节)，
+SID = N_sid(提供方 NID, 16 字节) ‖ L_sid(去 query 后 URL 的 SHA1, 20 字节)，
 统一以 72 位十六进制字符串作为内存中的键（与参考实现的 AnnSidUnits 约定一致）。
+
+注意：SID 标识的是"资源"，故计算 L_sid 时只取 scheme/host/path，去掉 query 与
+fragment——同一 path、不同查询参数命中同一 SID。query 仍会在请求传输链路（CoLoR
+载荷与回源 TCP）中原样保留，只是不参与 SID 哈希。
 """
 from __future__ import annotations
 
 import hashlib
+from urllib.parse import urlsplit, urlunsplit
 
 from .constants import LSID_LEN, NID_LEN, NSID_LEN
 
 
+def _canonical_for_sid(url: str) -> str:
+    """计算 SID 用的规整 URL：保留 scheme/host/path，去掉 query 与 fragment。"""
+    parts = urlsplit(url)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+
+
 def lsid_from_url(url: str) -> bytes:
-    """L_sid = SHA1(完整 URL)，返回 20 字节。"""
-    return hashlib.sha1(url.encode("utf-8")).digest()
+    """L_sid = SHA1(去 query/fragment 后的 URL)，返回 20 字节。"""
+    return hashlib.sha1(_canonical_for_sid(url).encode("utf-8")).digest()
 
 
 def nid_to_bytes(nid: int) -> bytes:

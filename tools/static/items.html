@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CoLoR Proxy · /api/items 交互控制台</title>
+<style>
+  :root{
+    --bg:#0b1021; --panel:#141a33; --panel2:#10162c; --line:#26304f;
+    --ink:#e8ecff; --muted:#9aa6d4; --brand:#6ea8ff; --brand2:#9b7bff;
+    --ok:#46e0a8; --warn:#ffd166; --danger:#ff7a93;
+    --mono:ui-monospace,SFMono-Regular,"Cascadia Code",Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0; color:var(--ink); background:
+      radial-gradient(1200px 600px at 15% -10%, #1b2547 0, transparent 60%),
+      radial-gradient(900px 500px at 110% 10%, #2a1c4a 0, transparent 55%), var(--bg);
+    font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:960px; margin:0 auto; padding:40px 24px 64px}
+  a{color:var(--brand); text-decoration:none}
+  .badge{display:inline-flex; gap:8px; align-items:center; padding:6px 14px; border:1px solid var(--line);
+    border-radius:999px; color:var(--muted); font-size:13px; background:rgba(255,255,255,.02)}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 12px var(--ok)}
+  h1{font-size:clamp(26px,4.5vw,40px); line-height:1.1; margin:18px 0 8px; letter-spacing:-.02em}
+  h1 .grad{background:linear-gradient(100deg,var(--brand),var(--brand2));-webkit-background-clip:text;
+    background-clip:text; color:transparent}
+  .lead{color:var(--muted); max-width:640px}
+  .panel{background:linear-gradient(180deg,var(--panel),var(--panel2)); border:1px solid var(--line);
+    border-radius:16px; padding:22px; margin:22px 0}
+  .panel h2{margin:0 0 14px; font-size:18px}
+  .row{display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end}
+  label{display:block; font-size:12px; color:var(--muted); margin:0 0 6px}
+  input{width:100%; background:#0c1226; color:var(--ink); border:1px solid var(--line);
+    border-radius:10px; padding:10px 12px; font:inherit; font-size:14px}
+  input:focus{outline:none; border-color:var(--brand)}
+  .field{flex:1 1 200px}
+  button{cursor:pointer; border:1px solid transparent; border-radius:10px; padding:10px 16px;
+    font:inherit; font-weight:600; font-size:14px; color:#0b1021;
+    background:linear-gradient(100deg,var(--brand),var(--brand2))}
+  button.ghost{background:transparent; color:var(--ink); border-color:var(--line)}
+  button.warn{background:var(--warn)} button.danger{background:var(--danger); color:#1a0410}
+  button:active{transform:translateY(1px)}
+  .items{display:grid; gap:12px}
+  .item{display:grid; grid-template-columns:64px 1fr 1fr auto; gap:12px; align-items:end;
+    background:#0e1429; border:1px solid var(--line); border-radius:12px; padding:14px}
+  .item .id{font-family:var(--mono); font-weight:700; color:var(--brand); align-self:center}
+  .item .acts{display:flex; gap:8px}
+  .empty{color:var(--muted); font-size:14px; padding:8px 0}
+  .log{font-family:var(--mono); font-size:12.5px; background:#0a0f20; border:1px solid var(--line);
+    border-radius:12px; padding:14px; max-height:240px; overflow:auto; margin:0}
+  .log div{padding:2px 0; white-space:pre-wrap; word-break:break-all}
+  .m{font-weight:700} .m.GET{color:var(--brand)} .m.POST{color:var(--ok)}
+  .m.PUT{color:var(--warn)} .m.DELETE{color:var(--danger)}
+  .st-2{color:var(--ok)} .st-4,.st-5{color:var(--danger)}
+  .hint{color:var(--muted); font-size:13px; margin:8px 0 0}
+  @media(max-width:640px){.item{grid-template-columns:1fr 1fr; }.item .id{grid-column:1/-1}.item .acts{grid-column:1/-1}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <span class="badge"><span class="dot"></span> 增删改查实时打到源站 <code>/api/items</code></span>
+  <h1><span class="grad">/api/items</span> 交互控制台</h1>
+  <p class="lead">填表单 → 页面即时更新。每个操作都是一次经 CoLoR 代理的真实 HTTP 请求；
+    条目 id 走 <code>?id=N</code>（不入 SID、原样透传）。本页内联全部 CSS/JS，<strong>零外链</strong>。</p>
+
+  <div class="panel">
+    <h2>新建条目（POST /api/items）</h2>
+    <div class="row">
+      <div class="field"><label for="name">名称 name</label><input id="name" placeholder="例如 alpha"></div>
+      <div class="field"><label for="note">备注 note</label><input id="note" placeholder="可选"></div>
+      <button id="create">创建</button>
+    </div>
+    <p class="hint">提示：v1 无请求分片，请求需单包装下（~1.3KB 内），表单数据很小、无压力。</p>
+  </div>
+
+  <div class="panel">
+    <div class="row" style="justify-content:space-between">
+      <h2 style="margin:0">条目列表（GET /api/items）</h2>
+      <button class="ghost" id="refresh">刷新</button>
+    </div>
+    <div id="items" class="items"></div>
+  </div>
+
+  <div class="panel">
+    <h2>请求日志</h2>
+    <pre id="log" class="log"></pre>
+  </div>
+
+  <p class="hint"><a href="/showcase.html">← 返回展示页 showcase.html</a></p>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  var API = "/api/items";
+  var logEl = document.getElementById("log");
+  var itemsEl = document.getElementById("items");
+
+  function log(method, url, status, data){
+    var line = document.createElement("div");
+    var stClass = "st-" + String(status).charAt(0);
+    line.innerHTML =
+      '<span class="m '+method+'">'+method+'</span> '+url+
+      ' <span class="'+stClass+'">→ '+status+'</span> '+
+      (typeof data === "string" ? data : JSON.stringify(data));
+    logEl.insertBefore(line, logEl.firstChild);
+  }
+
+  function api(method, url, body){
+    var opt = { method: method, headers: {} };
+    if (body !== undefined){ opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
+    return fetch(url, opt).then(function(res){
+      return res.text().then(function(t){
+        var data; try { data = JSON.parse(t); } catch(e){ data = t; }
+        log(method, url, res.status, data);
+        return { status: res.status, data: data };
+      });
+    }).catch(function(err){ log(method, url, "ERR", String(err)); throw err; });
+  }
+
+  function field(value){
+    var i = document.createElement("input");
+    i.value = (value == null ? "" : String(value));
+    return i;
+  }
+
+  function renderItem(it){
+    var row = document.createElement("div"); row.className = "item";
+    var id = document.createElement("div"); id.className = "id"; id.textContent = "#" + it.id;
+    var nameWrap = document.createElement("div");
+    var nameLbl = document.createElement("label"); nameLbl.textContent = "name";
+    var nameIn = field(it.name); nameWrap.appendChild(nameLbl); nameWrap.appendChild(nameIn);
+    var noteWrap = document.createElement("div");
+    var noteLbl = document.createElement("label"); noteLbl.textContent = "note";
+    var noteIn = field(it.note); noteWrap.appendChild(noteLbl); noteWrap.appendChild(noteIn);
+
+    var acts = document.createElement("div"); acts.className = "acts";
+    var save = document.createElement("button"); save.className = "warn"; save.textContent = "保存";
+    save.onclick = function(){
+      api("PUT", API + "?id=" + it.id, { name: nameIn.value, note: noteIn.value }).then(refresh);
+    };
+    var del = document.createElement("button"); del.className = "danger"; del.textContent = "删除";
+    del.onclick = function(){ api("DELETE", API + "?id=" + it.id).then(refresh); };
+    acts.appendChild(save); acts.appendChild(del);
+
+    row.appendChild(id); row.appendChild(nameWrap); row.appendChild(noteWrap); row.appendChild(acts);
+    return row;
+  }
+
+  function refresh(){
+    return api("GET", API).then(function(r){
+      itemsEl.innerHTML = "";
+      var list = (r.data && r.data.items) || [];
+      if (!list.length){
+        var e = document.createElement("div"); e.className = "empty"; e.textContent = "暂无条目，先在上面创建一个。";
+        itemsEl.appendChild(e); return;
+      }
+      list.forEach(function(it){ itemsEl.appendChild(renderItem(it)); });
+    });
+  }
+
+  document.getElementById("create").onclick = function(){
+    var name = document.getElementById("name");
+    var note = document.getElementById("note");
+    api("POST", API, { name: name.value, note: note.value }).then(function(){
+      name.value = ""; note.value = ""; name.focus(); return refresh();
+    });
+  };
+  document.getElementById("refresh").onclick = refresh;
+
+  refresh();
+})();
+</script>
+</body>
+</html>

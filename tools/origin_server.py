@@ -6,6 +6,24 @@
 
 注意：用 HTTP/1.0（默认），响应后即关闭连接 → 提供端"读到 EOF"能拿到完整响应。
 
+提供的样例端点：
+
+- ``GET  /`` / ``GET /hello.html``  小页面（单包即可传完，最简冒烟）
+- ``GET  /showcase.html``           较大的自包含页面（跨多个 DATA 分片，验证分片重组）
+- ``GET  /items.html``              ``/api/items`` 的交互控制台（内联 CSS/JS，自包含；表单增删改查）
+- ``GET  /ping``                    ``pong``
+- ``/api/items`` 内存 CRUD（条目 id 走 query ``?id=N``，故四种方法共用同一 SID）::
+
+      GET    /api/items          列出全部
+      GET    /api/items?id=N     取单条 / 404
+      POST   /api/items          读 JSON body 创建，返回 {id, ...}（201）
+      PUT    /api/items?id=N     覆盖更新 / 404
+      DELETE /api/items?id=N     删除 / 404
+
+  之所以把 id 放在 query 而非路径 ``/api/items/N``：SID 由 ``L_sid = SHA1(去 query 后 URL)``
+  派生且是整路径精确匹配，路径式每个 id 都会是不同 SID；放 query 则增删改查共用
+  ``/api/items`` 这一条 SID，同时端到端验证了"query 不入 SID、但原样透传到源站"。
+
 用法::
 
     python tools/origin_server.py                 # 监听 127.0.0.1:8000
@@ -15,7 +33,11 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import json
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 _HELLO_HTML = (
     "<!doctype html><html><head><meta charset='utf-8'><title>color-proxy origin</title></head>"
@@ -24,21 +46,153 @@ _HELLO_HTML = (
     "</body></html>"
 ).encode("utf-8")
 
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+
+def _load_static(name: str) -> bytes:
+    """读取 tools/static/ 下的静态文件；缺失时返回占位页（不致联调直接报错）。"""
+    try:
+        return (_STATIC_DIR / name).read_bytes()
+    except OSError:
+        return (f"<!doctype html><meta charset='utf-8'>"
+                f"<p>缺少静态文件 static/{name}</p>").encode("utf-8")
+
+
+#: 启动即缓存（测试会直接 import _OriginHandler，不走 main，故在模块层加载）
+_SHOWCASE_HTML = _load_static("showcase.html")
+_ITEMS_HTML = _load_static("items.html")
+#: 路径 -> 静态页字节。items.html 是 /api/items 的交互控制台（内联 CSS/JS，自包含）
+_STATIC_PAGES = {
+    "/showcase.html": _SHOWCASE_HTML,
+    "/items.html": _ITEMS_HTML,
+}
+
+# -- /api/items 的内存存储（ThreadingHTTPServer 下需加锁） -----------------------
+_store_lock = threading.Lock()
+_items: dict[int, dict] = {}
+_next_id = 1
+
+
+def _create_item(fields: dict) -> dict:
+    global _next_id
+    with _store_lock:
+        item_id = _next_id
+        _next_id += 1
+        item = {"id": item_id, **{k: v for k, v in fields.items() if k != "id"}}
+        _items[item_id] = item
+        return dict(item)
+
 
 class _OriginHandler(BaseHTTPRequestHandler):
     server_version = "color-proxy-origin/1.0"
 
+    # -- GET ---------------------------------------------------------------
     def do_GET(self) -> None:  # noqa: N802
-        if self.path in ("/", "/hello.html"):
+        path, query = self._split()
+        if path == "/api/items":
+            self._items_get(query)
+        elif path in _STATIC_PAGES:
+            self._respond(200, _STATIC_PAGES[path], "text/html; charset=utf-8")
+        elif path in ("/", "/hello.html"):
             self._respond(200, _HELLO_HTML, "text/html; charset=utf-8")
-        elif self.path == "/ping":
+        elif path == "/ping":
             self._respond(200, b"pong\n", "text/plain; charset=utf-8")
         else:
-            self._respond(404, f"404 Not Found: {self.path}\n".encode("utf-8"),
-                          "text/plain; charset=utf-8")
+            self._not_found(path)
 
     def do_HEAD(self) -> None:  # noqa: N802
         self._respond(200, _HELLO_HTML, "text/html; charset=utf-8", write_body=False)
+
+    # -- POST / PUT / DELETE（仅 /api/items） ------------------------------
+    def do_POST(self) -> None:  # noqa: N802
+        path, _ = self._split()
+        if path != "/api/items":
+            return self._not_found(path)
+        body = self._read_json()
+        if body is None:
+            return
+        if not isinstance(body, dict):
+            return self._respond_json(400, {"error": "body must be a JSON object"})
+        self._respond_json(201, _create_item(body))
+
+    def do_PUT(self) -> None:  # noqa: N802
+        path, query = self._split()
+        if path != "/api/items":
+            return self._not_found(path)
+        item_id = self._query_id(query)
+        if item_id is None:
+            return self._respond_json(400, {"error": "missing or invalid ?id="})
+        body = self._read_json()
+        if body is None:
+            return
+        if not isinstance(body, dict):
+            return self._respond_json(400, {"error": "body must be a JSON object"})
+        with _store_lock:
+            if item_id not in _items:
+                return self._respond_json(404, {"error": "not found", "id": item_id})
+            item = {"id": item_id, **{k: v for k, v in body.items() if k != "id"}}
+            _items[item_id] = item
+            self._respond_json(200, dict(item))
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        path, query = self._split()
+        if path != "/api/items":
+            return self._not_found(path)
+        item_id = self._query_id(query)
+        if item_id is None:
+            return self._respond_json(400, {"error": "missing or invalid ?id="})
+        with _store_lock:
+            if _items.pop(item_id, None) is None:
+                return self._respond_json(404, {"error": "not found", "id": item_id})
+        self._respond_json(200, {"deleted": item_id})
+
+    # -- /api/items 的 GET 分支 -------------------------------------------
+    def _items_get(self, query: str) -> None:
+        item_id = self._query_id(query)
+        with _store_lock:
+            if item_id is None:
+                return self._respond_json(200, {"items": list(_items.values())})
+            item = _items.get(item_id)
+        if item is None:
+            return self._respond_json(404, {"error": "not found", "id": item_id})
+        self._respond_json(200, dict(item))
+
+    # -- 工具 --------------------------------------------------------------
+    def _split(self) -> tuple[str, str]:
+        """拆出 (path, query)。query 不参与 SID，但源站这里要真正读它（验证透传）。"""
+        parts = urlsplit(self.path)
+        return parts.path, parts.query
+
+    @staticmethod
+    def _query_id(query: str) -> int | None:
+        """从 query 解析 ``id``（透传验证点）；缺失/非整数返回 None。"""
+        raw = parse_qs(query).get("id", [None])[0]
+        if raw is None:
+            return None
+        try:
+            return int(raw)
+        except ValueError:
+            return None
+
+    def _read_json(self):
+        """按 Content-Length 读 body 并解析 JSON；解析失败回 400 并返回 None。"""
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        raw = self.rfile.read(length) if length else b""
+        if not raw:
+            return {}
+        try:
+            return json.loads(raw.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            self._respond_json(400, {"error": "invalid JSON body"})
+            return None
+
+    def _respond_json(self, code: int, obj) -> None:
+        self._respond(code, json.dumps(obj, ensure_ascii=False).encode("utf-8"),
+                      "application/json; charset=utf-8")
+
+    def _not_found(self, path: str) -> None:
+        self._respond(404, f"404 Not Found: {path}\n".encode("utf-8"),
+                      "text/plain; charset=utf-8")
 
     def _respond(self, code: int, body: bytes, content_type: str, write_body: bool = True) -> None:
         self.send_response(code)
@@ -60,7 +214,9 @@ def main() -> None:
     args = parser.parse_args()
 
     server = ThreadingHTTPServer((args.host, args.port), _OriginHandler)
-    print(f"源站已启动：http://{args.host}:{args.port}  （路径 /hello.html、/、/ping）")
+    print(f"源站已启动：http://{args.host}:{args.port}")
+    print("  页面： /hello.html  /showcase.html  /items.html（CRUD 交互控制台）")
+    print("  接口： /ping  /api/items（GET/POST/PUT/DELETE，id 走 ?id=N）")
     print("按 Ctrl+C 退出")
     try:
         server.serve_forever()

@@ -53,7 +53,7 @@ python -m colorproxy.main config.json
 | `nid` | 本机节点标识，32 位十六进制（128 bit） |
 | `ipv4` | 本机 IPv4（绑定原始套接字、注册给 RM） |
 | `rm_ipv4` | 资源管理器 IP |
-| `services[].url` | 对外发布的完整 URL（`L_sid = SHA1(url)`） |
+| `services[].url` | 对外发布的 URL；`L_sid = SHA1(去 query 后的 URL)`，故同 path、不同 `?query` 命中同一 SID |
 | `services[].origin_host/port` | 该 URL 对应的真实后端地址，省略则取 URL 自身的主机端口 |
 
 **消费端（请求端）**：
@@ -77,14 +77,48 @@ URL 会收到 502。
 无需管理员权限 / Npcap，可在普通环境运行：
 
 ```
-python tests/test_protocol.py     # 协议编解码单元测试（9/9）
+python tests/test_protocol.py     # 协议编解码单元测试（含 SID 去 query，10/10）
 python tests/stub_consumer.py     # 桩消费端 + 本地源站，验证服务端业务闭环
-python tests/test_consumer.py     # 消费端单元测试（GET/ACK 布局、反向路径、SID 表，5/5）
+python tests/test_consumer.py     # 消费端单元测试（GET/ACK 布局、反向路径、SID 表/去 query，8/8）
 python tests/stub_provider.py     # 桩提供端 + 桩 RM，验证消费端业务闭环（浏览器→GET→隧道→ACK→响应→写回）
-python tests/test_e2e_inproc.py   # 进程内贯通两端 + 真实源站（真 RM 联调前的最强离线保障）
+python tests/test_e2e_inproc.py   # 进程内贯通两端 + 真实源站（hello / showcase 分片 / CRUD 多方法 + query 透传）
 ```
 
-端到端联调用的测试源站：`python tools/origin_server.py --port 8000`（提供 `/hello.html`）。
+> Windows 控制台若显示中文乱码，加 `PYTHONUTF8=1` 前缀（仅影响日志显示，不影响断言）。
+
+### 测试源站与样例端点
+
+端到端联调用的测试源站：`python tools/origin_server.py --port 8000`，提供：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/hello.html`、`/` | 小页面，单包即传完（最简冒烟） |
+| `GET` | `/showcase.html` | 较大的**自包含**页面（内联 CSS/SVG，约 7 KB / 6 个分片），验证分片重组 |
+| `GET` | `/items.html` | `/api/items` 的**交互控制台**：表单增删改查，页面实时更新（内联 CSS/JS，自包含） |
+| `GET` | `/ping` | `pong` |
+| `GET` | `/api/items` | 列出全部条目；`?id=N` 取单条 / 404 |
+| `POST` | `/api/items` | 读 JSON body 创建，返回 `{id, ...}`（201） |
+| `PUT` | `/api/items?id=N` | 覆盖更新 / 404 |
+| `DELETE` | `/api/items?id=N` | 删除 / 404 |
+
+浏览器（或经代理）打开 `/items.html` 即可填表单创建、保存、删除条目——每个动作都是一次真实的
+`fetch('/api/items')`（用**相对 URL**，故直连与经代理两种方式都成立），页面随响应即时刷新并打印请求日志。
+
+条目 id 走 query（`?id=N`）而非路径：因 `L_sid = SHA1(去 query 后 URL)` 是整路径精确匹配，
+放 query 可让增删改查共用 `/api/items` 一条 SID，并端到端验证 **query 不入 SID、却原样透传到源站**。
+直连源站快速试：
+
+```
+curl http://127.0.0.1:8000/showcase.html
+curl -X POST -d '{"name":"a"}' http://127.0.0.1:8000/api/items
+curl -X PUT  -d '{"name":"b"}' "http://127.0.0.1:8000/api/items?id=1"
+curl -X DELETE              "http://127.0.0.1:8000/api/items?id=1"
+```
+
+> 经代理访问需先把这些 URL 发布为服务（已在 `config.json` / `config-consumer.json` 预置
+> `showcase.html` 与 `/api/items`）。**自包含约束**：经代理取回的页面不能引用任何外链资源
+> （`<link>`/`<img src>`/`<script src>`/外部字体）——代理只取所请求的这一个 URL，子资源会是
+> 各自独立、未发布的请求。
 
 ## 模块结构
 
