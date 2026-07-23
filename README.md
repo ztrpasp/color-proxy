@@ -10,8 +10,9 @@
 
 总体需求/分析见 `docs/PRD-v1.md`。
 
-> 本轮实现的是 **v1 最小功能**：不含 ESS 加密/HMAC、可靠传输（滑动窗口/重传）、
-> 并发（同 `(SID, 消费端NID)` 串行）、HTTPS、请求分片。
+> 本轮实现的是 **v1 最小功能**：不含 ESS 端到端加密、可靠传输（滑动窗口/重传）、
+> 并发（同 `(SID, 消费端NID)` 串行）、HTTPS、请求分片；**已实现 HMAC**（对提供端发出的
+> DATA 报文填充，供 BR 校验）。
 
 ## 交互流程（先拉后推）
 
@@ -78,6 +79,8 @@ URL 会收到 502。
 
 ```
 python tests/test_protocol.py     # 协议编解码单元测试（含 SID 去 query，10/10）
+python tests/test_hmac.py         # HMAC 生成回归（无密钥 MD5 末 4 字节，对齐参考实现/抓包常量，4/4）
+python tests/test_provider.py     # 服务端 handler 单元测试（ACK 透传 load 类型 / 无未决事务忽略，4/4）
 python tests/stub_consumer.py     # 桩消费端 + 本地源站，验证服务端业务闭环
 python tests/test_consumer.py     # 消费端单元测试（GET/ACK 布局、反向路径、SID 表/去 query，8/8）
 python tests/stub_provider.py     # 桩提供端 + 桩 RM，验证消费端业务闭环（浏览器→GET→隧道→ACK→响应→写回）
@@ -126,8 +129,8 @@ curl -X DELETE              "http://127.0.0.1:8000/api/items?id=1"
 colorproxy/
   protocol/        CoLoR 报文编解码（scapy 声明式 + 手工 CONTROL）
     constants.py   常量、报文类型、load[0] 标志
-    utils.py       校验和、字节序转换
-    sid.py         SID = N_sid(NID) ‖ L_sid(SHA1(url))
+    utils.py       校验和、字节序转换、HMAC 计算（MD5 末 4 字节）
+    sid.py         SID = N_sid(NID) ‖ L_sid(SHA1(去 query 后的 url))
     packets.py     ColorGet / ColorData / ColorAnnounce（含两处 ColorData 修正）
     control.py     注册请求构造 / 同步回复解析
   transport/
@@ -157,5 +160,8 @@ colorproxy/
 
 - CoLoR 段 **best-effort**，无重传；大响应或丢包时页面可能不完整。
 - 假设单个 HTTP 请求可装入一个 IP 包（不支持大 body 的请求分片）。
-- 不实现 ESS/HMAC；若部署的边界路由器强制校验 HMAC，需后续补充。
-- 仅服务已发布到共生网络的 URL；同 `(SID, 消费端NID)` 并发请求按 last-wins 串行。
+- 不实现 ESS 端到端加密。**HMAC 已实现**：对提供端发出的 DATA 报文按参考实现填充 HMAC 字段
+  （无密钥 MD5 取末 4 字节，种子为 GET 的 `Random_Num`），以通过边界路由器校验；仅生成/填充，
+  不校验入站，消费端 GET/ACK 暂不带 HMAC。
+- 仅服务已发布到共生网络的 URL；同 `(SID, 消费端NID)` 并发请求按 last-wins 串行（消费端用每-SID
+  锁把整个握手往返串起来，服务端未决事务表同键后到覆盖）。

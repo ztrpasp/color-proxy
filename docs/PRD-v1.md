@@ -1,6 +1,6 @@
 # 共生网络 Web 代理终端 PRD 需求文档 v1（color-proxy）
 
-> 状态：v1 草案（需求分析阶段产物）。本阶段只做需求分析，不含实现代码。
+> 状态：v1 需求（需求分析阶段产物）。**两端（消费端 + 提供端）v1 已实现并通过本地测试**；实现依据见 `docs/design-server-v1.md`、`docs/design-client-v1.md`，锁定决策与偏差见 `docs/HANDOVER.md` §4。下列条目已随实现更新：HMAC 生成（§7）、并发按 `(SID,消费端NID)` 串行/last-wins（FR-1.6/§9）、`L_SID` 去 query（FR-1.3/§5）、纯后台无系统托盘（FR-6/§3.1）、ACK 携带 payload 定案方案 (b)（§7）。
 > 配套参考：`需求.md`、`技术文档/共生网络技术文档.docx`、`技术文档/共生网络包格式.docx`、`技术文档/示意图.png`；参考实现 `C:\Users\ZWD15\Desktop\color-agent-plus`。
 
 ---
@@ -60,7 +60,7 @@
 - URL ↔ SID 映射的生成与维护；本域可访问 SID 表的获取（复用现有 CONTROL 注册/同步）。
 - 监听 IP 协议号 150 的 CoLoR 包并按本项目流程处理。
 - "先拉后推"握手（GET → 隧道 DATA → 携带 HTTP 请求的 DATA/ACK → 响应 DATA）。
-- Windows 后台服务 + 系统托盘（状态/启停/配置）。
+- Windows 后台常驻服务（**v1 未做系统托盘/GUI**，纯后台进程）。
 - **仅服务已发布到共生网络的 URL**：URL 不在本域 SID 表中时，向浏览器返回错误（如 502/404），不直连回落。
 
 ### 3.2 Out of Scope（v1 不做，列入 v2 演进）
@@ -69,7 +69,7 @@
 - **HTTP 请求分片**（v1 假设单个请求可装入一个 IP 包，见 §8）。
 - 透明流量劫持（WFP/路由重定向）；非 CoLoR URL 的直连回落。
 - 跨平台（v1 仅 Windows）。
-- 端到端加密 / 完整 PyQt 可视化界面。
+- 端到端加密（ESS）/ 完整 PyQt 可视化界面（系统托盘）。（注：报文头 **HMAC 已实现**——对提供端发出的 DATA 填充，供 BR 校验，见 §7；此处不做的是 ESS 端到端加密。）
 
 ---
 
@@ -78,21 +78,21 @@
 ### FR-1 消费端 HTTP 正向代理
 - FR-1.1 在可配置端口（默认如 `8910`）监听，接受浏览器/系统代理设置的 HTTP 连接。
 - FR-1.2 解析 HTTP 请求，提取**完整 URL**（含 scheme+host+path+query）与完整请求字节（头+body）。
-- FR-1.3 计算 `L_SID = SHA1(完整 URL)`；在本域可访问 SID 表中按 L_SID 匹配，得到完整 SID（含 N_SID=提供方 NID）。
+- FR-1.3 计算 `L_SID = SHA1(去 query/fragment 后的 URL)`（scheme+host+path，见 §5）；在本域可访问 SID 表中按 L_SID 匹配，得到完整 SID（含 N_SID=提供方 NID）。query 不参与 SID 计算，但随请求原样透传到源站，故同 path、不同 `?query` 命中同一 SID（可在一条 SID 上做 GET/POST/PUT/DELETE 增删改查）。
 - FR-1.4 命中：发起 §6 的 CoLoR 握手流程取回响应，原样写回浏览器 TCP 连接。
 - FR-1.5 未命中（非 CoLoR 服务）：向浏览器返回明确错误响应（502/404），并记录日志。
-- FR-1.6 维护**未决请求表**：`(SID, 事务标识) → 浏览器 TCP socket`，用于把异步到达的响应路由回正确连接（并发去复用，见 §9 开放项）。
+- FR-1.6 维护**未决请求表**：以 `(SID, 消费端NID)` 为键 → 浏览器 TCP 连接上下文，用于把异步到达的响应路由回正确连接。**v1 不做并发去复用**：消费端对同 `(SID, 消费端NID)` 的请求用「每-SID 锁」**串行**处理，服务端未决事务表按同键 **last-wins** 覆盖；不引入事务 ID（`SegID` 仅回带、不作键）。
 
 ### FR-2 提供端反向代理
 - FR-2.1 配置后端真实 Web 服务（URL 列表或 origin host:port）。
-- FR-2.2 为每个对外 URL 生成 SID（`N_SID=本机 NID`，`L_SID=SHA1(URL)`），通过 ANN 向 RM 发布；可携带访问策略（密级/白名单，复用现有 `SidUnit.Strategy_units`）。
+- FR-2.2 为每个对外 URL 生成 SID（`N_SID=本机 NID`，`L_SID=SHA1(去 query/fragment 后的 URL)`），通过 ANN 向 RM 发布；可携带访问策略（密级/白名单，复用现有 `SidUnit.Strategy_units`）。
 - FR-2.3 标记该 SID 为"**Web 类型**"，使收到 GET 时走握手流程（先回隧道 DATA），而非直接推内容。
 - FR-2.4 收到 GET（Web 类型 SID）：校验 SID 已发布 → 回一个**隧道建立 DATA**（B=0，**空/占位 payload**），把累积的 PID 序列带回请求端。
 - FR-2.5 收到携带 HTTP 请求 payload 的 DATA/ACK：提取 HTTP 请求字节 → 转发给真实 Web 服务器（建立到 origin 的 TCP）→ 取回 HTTP 响应。
 - FR-2.6 把 HTTP 响应（头+body）作为 payload 封装为 DATA（B=0），沿 PID 序列发回请求端（best-effort，可多包）。
 
 ### FR-3 SID 生成与映射
-- FR-3.1 `L_SID = SHA1(完整 URL)`（160 bit，与现有文件哈希同算法）。
+- FR-3.1 `L_SID = SHA1(去 query/fragment 后的 URL)`（160 bit，与现有文件哈希同算法；query 不入 SID，见 FR-1.3）。
 - FR-3.2 `N_SID = 提供方 NID`（128 bit）。`SID = N_SID ‖ L_SID`（288 bit / 72 hex）。
 - FR-3.3 消费端**按 L_SID 匹配**本域 SID 表即可解析出 N_SID/提供方，无需在表中存明文 URL（隐私友好）。
 - FR-3.4 提供端维护 `SID → 后端 URL/origin` 反向映射，用于收到请求后定位真实服务。
@@ -108,10 +108,10 @@
 - FR-5.3 还原 Web 服务包：从 DATA payload 还原 HTTP 字节，写入对应 TCP 连接（消费端）或 origin（提供端）。
 - FR-5.4 发包复用 scapy `Ether/IP(proto=150)/Raw` 封装（`ProxyLib.SendIpv4`）。
 
-### FR-6 后台服务与系统托盘
-- FR-6.1 以 Windows 后台服务/常驻进程运行（需管理员权限：raw socket + Npcap）。
-- FR-6.2 系统托盘：显示运行状态、启停代理、打开配置、查看简要日志。
-- FR-6.3 配置项：本机 NID、本机 IPv4、RM IP、代理监听端口、角色开关（消费/提供）、提供端后端 URL 表。复用现有 `data.json` 风格配置。
+### FR-6 后台服务
+- FR-6.1 以 Windows 后台常驻进程运行（需管理员权限：raw socket + Npcap）。
+- FR-6.2 ~~系统托盘~~：**v1 未实现**，为纯后台服务（无 GUI/托盘）；列入 v2。
+- FR-6.3 配置项：本机 NID、本机 IPv4、RM IP。消费端另有代理监听端口 `proxy_port`（默认 8910）与可选静态 SID 预载；提供端另有 `services[]`（对外 URL + 后端 origin host:port）。消费端与提供端为**两个入口 / 两份配置**（`config-consumer.json` / `config.json`），非单进程角色开关。
 
 ---
 
@@ -119,7 +119,7 @@
 
 ```
 SIDEntry {
-  l_sid:     hex(20B)      # SHA1(URL)，消费端用它匹配
+  l_sid:     hex(20B)      # SHA1(去 query/fragment 后的 URL)，消费端用它匹配
   n_sid:     hex(16B)      # 提供方 NID（=路由目标/认证）
   type:      "web"         # 区分文件类/Web 类
   strategy:  {密级, 白名单} # 复用 SidUnit.Strategy_units（可选）
@@ -161,9 +161,10 @@ SIDEntry {
 
 ## 7. 协议适配要点
 
-- **ACK/DATA 携带 payload**：技术文档中 B=1 的 ACK 不含负载。v1 需扩展：允许携带 PID 序列的 DATA 型报文（步骤④，方向为消费端→提供端）承载 HTTP 请求字节作为 payload。实现上可选 (a) 直接用 B=0 的 DATA 携带 payload + Destination_NID=NID_P + PID 序列；或 (b) 复用 B=1 ACK 通道并扩展其 payload 字段。**设计阶段二选一**（倾向 a，语义更清晰）。
+- **ACK/DATA 携带 payload**：技术文档中 B=1 的 ACK 不含负载。v1 扩展：允许携带 PID 序列的 DATA 型报文（步骤④，方向为消费端→提供端）承载 HTTP 请求字节作为 payload。**已锁定并实现方案 (b)：复用 B=1 ACK 通道扩展其 payload 字段**（经核实序列化里 `load` 本就在 checksum 之后通用追加，无需改包序列化/解析，仅在接收端重定义 B=1 分支语义）。
 - **隧道 DATA 的识别**：步骤③的隧道 DATA 用空/占位 payload + 约定标志位识别，消费端据此只提取 PID 序列、不交浏览器。
 - **回址**：域内（PID 序列为空）走 `PeerProxys[NID]→IP`；跨域走 `PXs[PX]→IP`（PX = PID 高 16 位），复用现有逻辑。
+- **HMAC（已实现）**：提供端对**发出的每个 DATA 报文**（隧道 DATA、响应 DATA）填充报文头 HMAC 字段（报文头 `Flags` 置 `C=0x04`）。算法为无密钥 MD5 取末 4 字节（对照参考实现 `CalcHMAC`），种子取自 GET 报文的 `Random_Num`（R=1 时的 4 字节），隧道与响应 DATA 复用同一种子；在校验和之前计算，使校验和覆盖最终 HMAC，以通过 BR 的 HMAC 校验。当前**仅生成/填充、不校验入站**；消费端的 GET/ACK 暂不携带 HMAC。注意此报文头 `C`(HMAC) 位与 §7 之外的应用层 `load[0]` ESS 位是两码事（后者恒 0，不加密）。
 
 ---
 
@@ -186,14 +187,14 @@ SIDEntry {
 **非功能需求**
 - 平台：**仅 Windows**；复用 `color-agent-plus` 的 `CoLoRProtocol/ProxyLib/slideWindow`（slideWindow v1 不启用）。
 - 运行环境：Python 3.8+、scapy、需管理员权限 + Npcap。
-- 形态：后台服务 + 系统托盘（轻量，贴近"无感知"）。
+- 形态：纯后台常驻服务（**v1 无系统托盘/GUI**）。
 - 性能：v1 以"功能跑通 + 小资源演示"为准，不设吞吐指标。
 
-**开放设计项（设计阶段细化，本阶段不阻塞 PRD）**
-1. **并发响应去复用**：同一 URL（同 SID）多个并发请求时，如何把响应路由回正确浏览器连接（事务 ID 放在哪个字段 / 是否串行化 / 用 SegID 空间）。
-2. **§7 的 ACK 携带 payload 方案 (a) vs (b) 最终选型**。
-3. **提供端取回响应的方式**：每请求新建到 origin 的 TCP，还是连接池/keep-alive。
-4. **HTTP keep-alive / 多请求复用同一浏览器 TCP 连接**的处理。
+**开放设计项（已在设计/实现阶段定案，记录于此备查）**
+1. **并发响应去复用** → **不做并发**：按 `(SID, 消费端NID)` 串行（消费端每-SID 锁）、服务端 last-wins 覆盖，不引入事务 ID（`SegID` 仅回带、不作键）。
+2. **§7 的 ACK 携带 payload 方案 (a) vs (b)** → 选定 **(b) 复用 B=1 ACK 通道**。
+3. **提供端取回响应的方式** → **每请求新建到 origin 的 TCP**，强制 `Connection: close`，读到 EOF。
+4. **HTTP keep-alive / 复用浏览器 TCP 连接** → v1 不依赖 keep-alive（回源强制 `Connection: close`）。
 
 ---
 
@@ -208,7 +209,7 @@ SIDEntry {
 | PID 序列解析工具 | `src/Tools/pid_transfer.py` |
 | 配置(NID/IPv4/RM IP)采集与 data.json | `src/Frontend/logInWindow.py` |
 
-**新增模块（color-proxy 新写）**：HTTP 正向代理监听+解析、提供端反向代理转发、URL↔SID 映射与本域表查询、Web 类型 SID 的握手编排、系统托盘/后台服务。
+**新增模块（color-proxy 新写）**：HTTP 正向代理监听+解析、提供端反向代理转发、URL↔SID 映射与本域表查询、Web 类型 SID 的握手编排、后台服务（v1 无系统托盘）。
 
 ---
 
@@ -231,4 +232,4 @@ SIDEntry {
 - M1 协议栈移植 + 收发包打通（proto 150 收发、配置/注册/SID 表）。
 - M2 提供端：ANN 发布 Web 类型 SID + GET→隧道 DATA + 接收 HTTP 请求→转发 origin→响应 DATA。
 - M3 消费端：HTTP 正向代理监听/解析 + GET + 提取 PID + 推 HTTP 请求 + 还原响应回浏览器。
-- M4 端到端联调（§11 用例）+ 系统托盘/后台服务封装。
+- M4 端到端联调（§11 用例）+ 后台服务封装（v1 无系统托盘）。

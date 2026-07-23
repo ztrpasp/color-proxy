@@ -1,26 +1,26 @@
 {
   "nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
-  "ipv4": "10.135.147.229",
-  "rm_ipv4": "10.0.0.1",
+  "ipv4": "172.10.0.2",
+  "rm_ipv4": "172.10.0.5",
   "services": [
     {
-      "url": "http://10.135.147.229:8000/hello.html",
-      "origin_host": "127.0.0.1",
+      "url": "http://172.10.0.2:8000/hello.html",
+      "origin_host": "172.10.0.2",
       "origin_port": 8000
     },
     {
-      "url": "http://10.135.147.229:8000/showcase.html",
-      "origin_host": "127.0.0.1",
+      "url": "http://172.10.0.2:8000/showcase.html",
+      "origin_host": "172.10.0.2",
       "origin_port": 8000
     },
     {
-      "url": "http://10.135.147.229:8000/items.html",
-      "origin_host": "127.0.0.1",
+      "url": "http://172.10.0.2:8000/items.html",
+      "origin_host": "172.10.0.2",
       "origin_port": 8000
     },
     {
-      "url": "http://10.135.147.229:8000/api/items",
-      "origin_host": "127.0.0.1",
+      "url": "http://172.10.0.5:8000/api/items",
+      "origin_host": "172.10.0.5",
       "origin_port": 8000
     }
   ]

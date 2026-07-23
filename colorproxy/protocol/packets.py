@@ -7,7 +7,8 @@
    含两个 NID（Destination_NID=提供方、第二个=消费端），原定义遗漏了第二个。
 2. ``ColorData`` 的 ``PID_Pointer`` 在构建时自动回填（= 有效 PID 数），原定义未填。
 
-并移除了 ESS/HMAC 相关分支、攻击/ODC 等本服务端用不到的类型。
+并移除了 ESS 加密及攻击/ODC 等本服务端用不到的类型；HMAC 以精简形式在
+``ColorData.post_build`` 中实现（C 置位时按无密钥 MD5 取末 4 字节回填，见下）。
 CONTROL 报文因 RM 同步表的字段次序与声明式定义不一致，改在 control.py 中手工编解码。
 """
 from __future__ import annotations

@@ -21,7 +21,7 @@ PRD-v1 已批准。与请求端相关的锁定决策：
 
 ### 1.1 基本约定
 - IP 协议号 **150**；报文类型：GET(0x72)、DATA(0x73，B=1 即 ACK)、ANN(0x71)、CONTROL(0x74)。
-- `SID = N_sid(提供方 NID,16B) ‖ L_sid(SHA1(完整URL),20B)`（72 hex）。消费端按 `SHA1(url)` 匹配本域 SID 表得到 N_sid。
+- `SID = N_sid(提供方 NID,16B) ‖ L_sid(SHA1(去 query/fragment 后的 URL),20B)`（72 hex）。消费端按同法匹配本域 SID 表得到 N_sid；query 不入 SID，但随请求透传到源站。
 - **v1 无可靠传输 / 无滑动窗口 / 无事务ID**；未决事务按 `(SID, 消费端NID)` 串行，后到覆盖。
 - **假设单个 HTTP 请求可装入一个 IP 包**；HTTP 响应可多包，best-effort，无重传。
 
@@ -50,6 +50,7 @@ PRD-v1 已批准。与请求端相关的锁定决策：
 
 - TUNNEL / REQUEST 单包，`LAST=1`。RESPONSE 多包时仅最后一片置 `LAST`。
 - 消费端据 `load[0]` 区分"②隧道(空)"与"④响应(有内容)"，避免把空隧道包误当响应。
+- 注意：`load[0]` 的 `bit2 ESS` 是应用层负载位（v1 恒 0，不加密），与报文头 `Flags.C`(HMAC) 不同。提供端发出的 DATA 已填 HMAC（见服务端设计 §2.5/§2.9）；消费端 GET/ACK **当前不带 HMAC**。
 
 ---
 
@@ -60,7 +61,7 @@ PRD-v1 已批准。与请求端相关的锁定决策：
 - 复用 `color-agent-plus` 的 CoLoR 网络栈（raw socket 收 proto 150 + `SendIpv4` 发）与配置（`Nid/IPv4/rmIPv4`）、RM 注册、本域 SID 表获取。
 
 ### 2.2 核心流程（每条浏览器 TCP 连接 / 每个请求）
-1. 解析 HTTP 请求，取**完整 URL** 与完整请求字节；`L_SID=SHA1(url)`，查本域 SID 表得 `SID`(含 N_sid)。命中→继续；未命中→回 502/404。
+1. 解析 HTTP 请求，取**完整 URL** 与完整请求字节；`L_SID=SHA1(去 query/fragment 后的 URL)`（query 不入 SID、但随请求透传），查本域 SID 表得 `SID`(含 N_sid)。命中→继续；未命中→回 502/404。
 2. 发 **GET**：`NSID/LSID/nid=NID_C`，`S=1` 且 `SegID=本次tx`，发往 RM（`SendIpv4(GetRMip(), ...)`）。记 `pending[(SID,NID_C)]=浏览器socket`（与服务端键一致，串行）。
 3. 收 **隧道DATA(B=0, load[0]=TUNNEL)**：从包头 `PID_List` 提取 PID 序列。
 4. 发 **ACK(B=1)**：`nid_pro=该 SID 的提供方NID`、`nid_cus=NID_C`、`SegID=tx`、`PIDs=按现有 ACK 约定的反向路径`（参考现有 ACK 构造 `RecvDataPkt.PIDs[1:][::-1]`）、`load=bytes([0x20|0x01])+完整HTTP请求字节`（HTTP_REQUEST|LAST）。
@@ -73,7 +74,7 @@ PRD-v1 已批准。与请求端相关的锁定决策：
 ### 2.4 契约依赖（务必遵守）
 - §1.2 状态机与 §1.3 `load[0]` 约定。
 - GET 必须 `S=1` 并在 `SegID` 放置 tx，ACK 原样回带。
-- 并发同 `(SID,NID_C)` 请求由消费端自行串行（与服务端 last-wins 策略对齐）。
+- 并发同 `(SID,NID_C)` 请求由消费端自行串行（实现用**每-SID 锁**把 GET→隧道→ACK→响应整个往返串起来，与服务端 last-wins 策略对齐；见 `consumer/proxy.py:orchestrate_request`、`consumer/state.py:sid_lock`）。
 - 单个 HTTP 请求需可装入一个 IP 包（v1 不做请求分片）。
 
 ### 2.5 验证（请求端为主）

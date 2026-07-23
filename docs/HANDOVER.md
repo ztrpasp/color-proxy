@@ -35,6 +35,8 @@
 - 协议层编解码：GET/DATA/ANN（scapy 声明式）+ CONTROL（手工）；9/9 单元测试通过。
 - 传输层：原始套接字接收（proto 150 + `SIO_RCVALL`）+ scapy `sendp` 发送。
 - 业务：向 RM 注册并处理同步、发布 Web 服务（ANN）、`handle_get`（隧道 DATA）、`handle_ack`（取 HTTP 请求）、`OriginWorker`（回源 + 响应 DATA）。
+- **HMAC 生成**：对发出的 DATA（隧道/响应）填充报文头 HMAC（`Flags.C`，无密钥 MD5 末 4 字节，种子取 GET 的 `Random_Num`），以通过 BR 校验；`tests/test_hmac.py` 4/4 通过。仅生成/填充，不校验入站。
+- **多方法 HTTP + query 透传**：GET/POST/PUT/DELETE/HEAD 均可端到端（`CONNECT`/HTTPS 回 501）；`L_sid = SHA1(去 query 后 URL)`，query 不入 SID 但透传到源站（`tests/test_e2e_inproc.py` 覆盖 CRUD 多方法 + query 透传）。
 - 业务闭环测试 `tests/stub_consumer.py` 通过（绕过原始套接字，用本地源站）。
 
 **已完成（消费端 v1，里程碑 M3）**
@@ -66,7 +68,7 @@
        `config-consumer.json` 的静态 SID 预载（`sids`）仍保留作离线/兜底。
 - 端到端联调脚手架：`tools/origin_server.py`（测试源站）、`tests/test_e2e_inproc.py`（进程内贯通两端，
   真 RM 前的最强离线保障）。运行方式见 README「运行」。
-- v2 演进：CoLoR 段可靠传输、HTTPS、请求分片、并发去复用、HMAC（若 BR 强制）。
+- v2 演进：CoLoR 段可靠传输、HTTPS、请求分片、并发去复用、ESS 端到端加密、入站 HMAC 校验 / 消费端 HMAC。（**出站 HMAC 生成已实现**。）
 
 ---
 
@@ -74,11 +76,11 @@
 
 | 决策 | 取值 |
 |---|---|
-| 范围 | 消费端 + 提供端两端都做；**本轮只实现服务端** |
+| 范围 | 消费端 + 提供端两端都做；**两端 v1 均已实现并通过本地测试** |
 | 接入形态 | 消费端为 HTTP 正向代理；服务端为纯后台服务（无 GUI/托盘） |
 | 服务范围 | 仅服务已发布到共生网络的 URL；仅 HTTP（无 HTTPS） |
 | 可靠传输 | CoLoR 段 **best-effort**，v1 不做（v2 复用 `slideWindow`） |
-| 加密 | **不实现 ESS / HMAC** |
+| 加密 | **不实现 ESS 端到端加密**；**HMAC 已实现**（出站 DATA 生成/填充以通过 BR 校验，不校验入站） |
 | ACK 携带请求 | **复用 B=1 ACK 通道扩展 payload** 承载 HTTP 请求 |
 | 回源 | **每请求新建到 origin 的 TCP**，强制 `Connection: close` 读到 EOF |
 | 并发 | 不支持，按 `(SID, 消费端NID)` 串行（last-wins）；不引入事务 ID |
@@ -113,10 +115,11 @@
 ## 7. 与消费端的接口契约（两端必须一致）
 
 详见 `docs/design-client-v1.md` §1。要点：
-- `SID = N_sid(提供方NID) ‖ L_sid(SHA1(url))`，消费端按 `SHA1(url)` 在本域 SID 表匹配得 N_sid。
+- `SID = N_sid(提供方NID) ‖ L_sid(SHA1(去 query 后的 url))`，消费端按同法在本域 SID 表匹配得 N_sid（query 不入 SID，但透传到源站）。
 - 握手：GET → 隧道 DATA(B=0, `load[0]=0x10`) → ACK(B=1, `load=[0x20]+HTTP请求`) → 响应 DATA(B=0, `load=[0x30(|0x01末片)]+分片`)。
 - 消费端 GET 须置 S 标志并在 `Segment_ID` 放事务标识（服务端原样回带）。
 - ACK(B=1)：`Destination_NID=提供方NID`、`Source_NID(第二个NID)=消费端NID`、`PID_List=` 从隧道 DATA 提取并按现有 ACK 约定反向。
+- **HMAC**：提供端发出的隧道/响应 DATA 均置 `Flags.C` 并填 4 字节 HMAC（无密钥 MD5 末 4 字节，种子=GET 的 `Random_Num`）；消费端 GET/ACK **当前不带 HMAC**。
 
 ---
 
@@ -135,7 +138,7 @@
    - 准备拓扑：本机跑服务端（发布 `http://prov.local/x` → 本地 `python -m http.server 8000`），真实 RM（+跨域 BR）。
    - 以管理员启动 `python -m colorproxy.main config.json -v`，确认日志出现"代理注册完成""已发布 Web 服务"。
    - 用桩或消费端发 GET，抓包（Wireshark 过滤 `ip.proto==150`）确认 GET→隧道DATA→ACK→响应DATA 链路与 `load[0]` 类型。
-   - 易错点：注册同步表解析、回址(PX/域内)、Flags 设置、是否需 HMAC（若 BR 强制）。
+   - 易错点：注册同步表解析、回址(PX/域内)、Flags 设置、HMAC 能否通过 BR 校验（出站生成已实现，需真机确认 BR 放行）。
 2. **消费端开发**：按 `docs/design-client-v1.md`，HTTP 正向代理监听端口 → 解析 URL → 查 SID 表 → 跑握手 → 写回浏览器。可复用本仓库 `colorproxy/protocol`。
 3. **可靠传输（v2）**：把响应流接入参考实现的滑动窗口（`slideWindow.py`）思路。
 

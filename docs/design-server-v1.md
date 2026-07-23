@@ -14,6 +14,7 @@ PRD-v1 已批准，进入设计阶段。锁定决策：
 - **纯后台服务**（无系统托盘）：复用 `ColorMonitor.Monitor` 收包主循环 + `PktHandler` 线程池，去掉 PyQt，做成 Windows 控制台/后台进程。
 - **每请求新建到 origin 的 TCP**：收到 HTTP 请求后，对每个请求新建一条到真实 Web 服务器的 TCP，强制 `Connection: close`，读到 EOF 即得完整响应。
 - **并发：不支持，按 (SID, 消费端NID) 串行**（last-wins）：未决事务表以 `(SID, consumer_nid)` 为键，不引入事务ID。
+- **HMAC 生成（实现补充）**：对发出的每个 DATA（隧道/响应）填充报文头 HMAC 字段（`Flags.C=0x04`，DATA 的 HMAC 4 字节），算法为无密钥 MD5 取末 4 字节，种子取 GET 的 `Random_Num`（R=1 时），以通过 BR 的 HMAC 校验；仅生成、不校验入站（详见 §2.5/§2.9 与 `protocol/packets.py:ColorData.post_build`）。
 
 参考实现路径：`C:\Users\ZWD15\Desktop\color-agent-plus`（复用其 `src/CoLoRProtocol`、`src/Frontend/ProxyLib.py`、`src/Frontend/ColorMonitor.py`）。
 
@@ -23,7 +24,7 @@ PRD-v1 已批准，进入设计阶段。锁定决策：
 
 ### 1.1 基本约定
 - IP 协议号 **150**；报文类型沿用：GET(0x72)、DATA(0x73，B=1 即 ACK)、ANN(0x71)、CONTROL(0x74)。
-- `SID = N_sid(提供方 NID,16B) ‖ L_sid(SHA1(完整URL),20B)`（72 hex）。消费端按 `SHA1(url)` 匹配本域 SID 表得到 N_sid。
+- `SID = N_sid(提供方 NID,16B) ‖ L_sid(SHA1(去 query/fragment 后的 URL),20B)`（72 hex）。消费端按同法匹配本域 SID 表得到 N_sid；query 不入 SID，但随请求透传到源站。
 - **v1 无可靠传输 / 无滑动窗口 / 无事务ID**；未决事务按 `(SID, 消费端NID)` 串行，后到覆盖。
 - **假设单个 HTTP 请求可装入一个 IP 包**（GET 类请求头远小于 ~1.3KB 预算）；HTTP 响应可多包，best-effort，无重传。
 
@@ -52,6 +53,7 @@ PRD-v1 已批准，进入设计阶段。锁定决策：
 
 - TUNNEL / REQUEST 单包，`LAST=1`。RESPONSE 多包时仅最后一片置 `LAST`。
 - 消费端据 `load[0]` 区分"②隧道(空)"与"④响应(有内容)"，避免把空隧道包误当响应。
+- 注意：此处 `load[0]` 的 `bit2 ESS` 是**应用层负载首字节**的位（v1 恒 0，不加密），与**报文头 `Flags` 的 `C`(HMAC) 位**是两码事。报文头 HMAC（`C=0x04`）已实现并在提供端发出的 DATA 上填充（见 §2.5/§2.9）。
 
 ---
 
@@ -77,17 +79,17 @@ PRD-v1 已批准，进入设计阶段。锁定决策：
 
 ### 2.4 Web 服务发布（ANN，新增薄封装，复用现有机制）
 新增 `AddWebSidUnit(url, origin)`，复用 `SidUnit`/缓存/`SidAnn`：
-- `Hash_sid = int(hashlib.sha1(url.encode()).hexdigest(),16)`（替代 `Sha1Hash(file)`，`ProxyLib.py:70-81,108-136`）。
+- `Hash_sid = SHA1(去 query/fragment 后的 url)`（`protocol/sid.py:lsid_from_url`，替代 `Sha1Hash(file)`；query 不入 SID）。
 - `N_sid=Nid, L_sid=Hash_sid, nid=Nid` → `SidUnit` → 入 `CacheSidUnits` → `SidAnn()` 发往 RM（`ProxyLib.py:183-250`）。
 - 发布后：`AnnSidUnits[SID]=SidUnit`（复用），并新增 `WebServices[SID]=(url, origin_host, origin_port)` 标记为 Web 类型。
 
 ### 2.5 收到 GET（state A，替换/扩展 0x72 分支）
 入口：`PktHandler.run()` 的 `data[0]==0x72`（`ColorMonitor.py:197-206`），校验和后：
-1. `get_pkt=GetPkt(0,Pkt=data)`；还原 `SID`，取 `nid=get_pkt.nid`、`pids=get_pkt.PIDs.copy()`、`tx=get_pkt.SegID`（`ColorMonitor.py:510-536`）。
+1. `get_pkt=GetPkt(0,Pkt=data)`；还原 `SID`，取 `nid=get_pkt.nid`、`pids=get_pkt.PIDs.copy()`、`tx=get_pkt.SegID`，并在 R=1 时取 4 字节 `Random_Num` 作 HMAC 种子（`ColorMonitor.py:510-536`）。
 2. 校验 `SID∈AnnSidUnits` 且 `SID∈WebServices`（Web 类型）；否则丢弃+日志。
 3. **回址判定（原样复用 `ColorMonitor.py:541-556`）**：`len(pids)==0`→域内 `PeerProxys[nid]`；否则跨域 `PX=pids[-1]>>16`→`PXs[PX]`。
-4. 记未决事务：`PendingWebTx[(SID,nid)] = {return_ip, pids, tx, ts}`（同键已存在则覆盖，§2.7）。
-5. **发隧道 DATA**（内容为空）：`DataPkt(1, B=0, R=(1 if 跨域 else 0), SID, nid_cus=nid, SegID=tx, PIDs=pids, load=bytes([0x10|0x01]))`（TUNNEL|LAST）→ `SendIpv4(return_ip, pkt.packing())`。
+4. 记未决事务：`PendingWebTx[(SID,nid)] = {return_ip, pids, tx, random_num, ts}`（同键已存在则覆盖，§2.7）。
+5. **发隧道 DATA**（内容为空）：`DataPkt(1, B=0, R=(1 if 跨域 else 0), C=(1 if 有种子 else 0), SID, nid_cus=nid, SegID=tx, PIDs=pids, HMAC种子=random_num, load=bytes([0x10|0x01]))`（TUNNEL|LAST）→ `SendIpv4(return_ip, pkt.packing())`。
    - 说明：隧道 DATA 即"内容为空的普通 B=0 DATA"，PIDs/R/PID指针处理**完全沿用现有发送逻辑**（`ColorMonitor.py:653-665`），仅把"读文件内容"换成"空载 TUNNEL 标记"。
 
 ### 2.6 收到 ACK（B=1，state B，**重定义 0x73 的 B==1 分支**）
@@ -110,10 +112,10 @@ v1 无滑动窗口 → 原 B==1 的滑窗 ACK 语义在 web 模式下不存在�
 
 ### 2.9 发送 HTTP 响应（state D，best-effort）
 复用文件发送的报文构造，去掉滑动窗口/重传：
-- 取 `tx=PendingWebTx[(SID,nid_cus)]` 的 `return_ip/pids/SegID`。
+- 取 `tx=PendingWebTx[(SID,nid_cus)]` 的 `return_ip/pids/SegID/random_num`（HMAC 种子）。
 - `resp` 按 `CHIP=1200B` 分片；对每片 `i`：
   `load = bytes([0x30 | (0x01 if 最后片 else 0)]) + chip`（HTTP_RESPONSE，末片置 LAST）
-  `DataPkt(1, B=0, R=(1 if 跨域 else 0), SID, nid_cus=nid_cus, SegID=tx, PIDs=pids, load=load)` → `SendIpv4(return_ip, pkt.packing())`（或 `SendIpv4_batch`）。
+  `DataPkt(1, B=0, R=(1 if 跨域 else 0), C=(1 if 有种子 else 0), SID, nid_cus=nid_cus, SegID=tx, PIDs=pids, HMAC种子=random_num, load=load)` → `SendIpv4(return_ip, pkt.packing())`（或 `SendIpv4_batch`）。
 - 顺序发送一次，无 ACK、无重传（v1）。发完 `PendingWebTx.pop((SID,nid_cus))`。
 - 与现有 `send_block_packets` 的差异：内容源=HTTP 响应而非文件、无 `SendingWindow`、不注册 `update_timer` 重传。
 
@@ -134,7 +136,7 @@ v1 无滑动窗口 → 原 B==1 的滑窗 ACK 语义在 web 模式下不存在�
 
 ### 2.11 全局状态（复用 + 新增）
 - 复用：`Nid/IPv4/rmIPv4/RegFlag/PeerProxys/PXs/AnnSidUnits`（`ProxyLib.py:15-38`）。
-- 新增：`WebServices: {SID→(url,host,port)}`、`PendingWebTx: {(SID,consumer_nid)→{return_ip,pids,SegID,ts}}`（加锁）。
+- 新增：`WebServices: {SID→(url,host,port)}`、`PendingWebTx: {(SID,consumer_nid)→{return_ip,pids,SegID,random_num,ts}}`（加锁）。
 
 ---
 
