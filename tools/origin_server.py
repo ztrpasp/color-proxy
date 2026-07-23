@@ -12,6 +12,7 @@
 - ``GET  /showcase.html``           较大的自包含页面（跨多个 DATA 分片，验证分片重组）
 - ``GET  /items.html``              ``/api/items`` 的交互控制台（内联 CSS/JS，自包含；表单增删改查）
 - ``GET  /ping``                    ``pong``
+- ``GET  /slow``                    分段涓流大响应（段间延时，验证流式 cut-through 的 TTFB）
 - ``/api/items`` 内存 CRUD（条目 id 走 query ``?id=N``，故四种方法共用同一 SID）::
 
       GET    /api/items          列出全部
@@ -35,6 +36,7 @@ import argparse
 import datetime
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -73,6 +75,20 @@ _items: dict[int, dict] = {}
 _next_id = 1
 
 
+#: /slow 涓流端点的默认参数（可经 query 覆盖）：段数、每段字节、段间延时（秒）
+_SLOW_SEGMENTS = 20
+_SLOW_SEG_SIZE = 4096
+_SLOW_DELAY = 0.05
+
+
+def slow_body(segments: int, seg_size: int) -> bytes:
+    """``/slow`` 的确定性响应体：第 i 段是 ``seg_size`` 个字母（A,B,C… 循环）。
+
+    供源站与测试共同引用，用于逐字节校验流式重组结果。
+    """
+    return b"".join(bytes([65 + (i % 26)]) * seg_size for i in range(segments))
+
+
 def _create_item(fields: dict) -> dict:
     global _next_id
     with _store_lock:
@@ -97,8 +113,33 @@ class _OriginHandler(BaseHTTPRequestHandler):
             self._respond(200, _HELLO_HTML, "text/html; charset=utf-8")
         elif path == "/ping":
             self._respond(200, b"pong\n", "text/plain; charset=utf-8")
+        elif path == "/slow":
+            self._slow(query)
         else:
             self._not_found(path)
+
+    # -- /slow 慢速涓流（验证流式 cut-through 的 TTFB 收益） ----------------
+    def _slow(self, query: str) -> None:
+        """分多段、段间延时地写 body，模拟"源站产字节慢"。
+
+        query 可覆盖 ``segs`` / ``size`` / ``delay``。总量跨多个 DATA 分片。
+        用 HTTP/1.0（默认）读到 EOF；每段 flush 以确保逐段真正上线。
+        """
+        params = parse_qs(query)
+        segments = int(params.get("segs", [str(_SLOW_SEGMENTS)])[0])
+        seg_size = int(params.get("size", [str(_SLOW_SEG_SIZE)])[0])
+        delay = float(params.get("delay", [str(_SLOW_DELAY)])[0])
+        body = slow_body(segments, seg_size)
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        for i in range(segments):
+            self.wfile.write(body[i * seg_size:(i + 1) * seg_size])
+            self.wfile.flush()
+            if i < segments - 1:
+                time.sleep(delay)
 
     def do_HEAD(self) -> None:  # noqa: N802
         self._respond(200, _HELLO_HTML, "text/html; charset=utf-8", write_body=False)

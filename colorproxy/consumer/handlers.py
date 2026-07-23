@@ -68,14 +68,14 @@ def _handle_tunnel(state: ConsumerState, data: ColorData) -> None:
 
 
 def _handle_response(state: ConsumerState, data: ColorData, load: bytes) -> None:
-    """state D：拼接响应分片，遇 LAST 唤醒等待线程。"""
+    """state D：把响应分片入队供工作线程流式写回浏览器，遇 LAST 入队哨兵。"""
     sid = sid_hex_from_packet(bytes(data.NSID), bytes(data.LSID))
     pending = state.get_pending(sid, state.nid)
     if pending is None:
         logger.warning("收到响应 DATA 但无匹配未决请求，忽略：SID=%s…", sid[:16])
         return
 
-    pending.response_buf += load[1:]
+    pending.chip_queue.put(load[1:])
     if load[0] & LoadFlag.LAST:
-        pending.response_event.set()
-        logger.info("响应接收完成：SID=%s… 共 %d 字节", sid[:16], len(pending.response_buf))
+        pending.chip_queue.put(None)  # 末片哨兵：通知工作线程流结束
+        logger.info("响应末片已入队：SID=%s…", sid[:16])

@@ -12,7 +12,7 @@ PRD-v1 已批准，进入设计阶段。锁定决策：
 
 - **复用 B=1 ACK 通道扩展 payload**：经字节级核实，`ProxyLib.DataPkt.packing()` 的 `load` 本就在 checksum 之后通用追加，`PktLength`/`Checksum` 会自动把 load 计入（`ProxyLib.py:746,792-794`）。**B=1 ACK 携带 payload 无需改动包序列化/解析**，只需构造时传 `load=` 并在接收端重定义 B=1 分支语义。
 - **纯后台服务**（无系统托盘）：复用 `ColorMonitor.Monitor` 收包主循环 + `PktHandler` 线程池，去掉 PyQt，做成 Windows 控制台/后台进程。
-- **每请求新建到 origin 的 TCP**：收到 HTTP 请求后，对每个请求新建一条到真实 Web 服务器的 TCP，强制 `Connection: close`，读到 EOF 即得完整响应。
+- **每请求新建到 origin 的 TCP**：收到 HTTP 请求后，对每个请求新建一条到真实 Web 服务器的 TCP，强制 `Connection: close`，读到 EOF 判定响应结束。**响应改为流式 cut-through**（边从 origin 读、边分片发回消费端），非"读满整份再发"（见 §2.8+2.9）。
 - **并发：不支持，按 (SID, 消费端NID) 串行**（last-wins）：未决事务表以 `(SID, consumer_nid)` 为键，不引入事务ID。
 - **HMAC 生成（实现补充）**：对发出的每个 DATA（隧道/响应）填充报文头 HMAC 字段（`Flags.C=0x04`，DATA 的 HMAC 4 字节），算法为无密钥 MD5 取末 4 字节，种子取 GET 的 `Random_Num`（R=1 时），以通过 BR 的 HMAC 校验；仅生成、不校验入站（详见 §2.5/§2.9 与 `protocol/packets.py:ColorData.post_build`）。
 
@@ -103,21 +103,14 @@ v1 无滑动窗口 → 原 B==1 的滑窗 ACK 语义在 web 模式下不存在�
 - `PendingWebTx` 键 `(SID, consumer_nid)`。同键新 GET 到来→覆盖旧事务（last-wins）；ACK 命中当前事务即处理，处理完 `pop`。
 - 不引入事务ID；`SegID` 仅回带不作键。（已知局限：同消费端对同 URL 的并发请求会相互覆盖，记入风险。）
 
-### 2.8 回源（state C，每请求新建 TCP）
-`OriginFetchWorker`：
-1. `socket.create_connection((origin_host,origin_port), timeout=T)`。
-2. **改写请求**：强制 `Connection: close`（必要时校正 `Host`），写入 `http_req`。
-3. **读到 EOF**：循环 `recv` 直到对端关闭 → 完整 HTTP 响应字节 `resp`。
-4. 关闭 socket。失败/超时 → 合成 `502 Bad Gateway` 文本作为 `resp`（让浏览器看到错误而非卡死）。
-
-### 2.9 发送 HTTP 响应（state D，best-effort）
-复用文件发送的报文构造，去掉滑动窗口/重传：
-- 取 `tx=PendingWebTx[(SID,nid_cus)]` 的 `return_ip/pids/SegID/random_num`（HMAC 种子）。
-- `resp` 按 `CHIP=1200B` 分片；对每片 `i`：
-  `load = bytes([0x30 | (0x01 if 最后片 else 0)]) + chip`（HTTP_RESPONSE，末片置 LAST）
-  `DataPkt(1, B=0, R=(1 if 跨域 else 0), C=(1 if 有种子 else 0), SID, nid_cus=nid_cus, SegID=tx, PIDs=pids, HMAC种子=random_num, load=load)` → `SendIpv4(return_ip, pkt.packing())`（或 `SendIpv4_batch`）。
-- 顺序发送一次，无 ACK、无重传（v1）。发完 `PendingWebTx.pop((SID,nid_cus))`。
-- 与现有 `send_block_packets` 的差异：内容源=HTTP 响应而非文件、无 `SendingWindow`、不注册 `update_timer` 重传。
+### 2.8 + 2.9 回源与发送 HTTP 响应（state C+D，**流式 cut-through**，best-effort）
+`OriginWorker`（`colorproxy/origin.py`）把回源与发送**合流**为边收边发，替代早先"读满整份 `resp` 再分片发"的存储转发（后者使浏览器首字节时延 ≈ 整份源站下载时间）：
+1. `socket.create_connection((origin_host,origin_port), timeout=ORIGIN_TIMEOUT)`；**改写请求**强制 `Connection: close`（必要时校正 `Host`），`sendall(http_req)`。
+2. 循环 `recv(65536)` 累积到 `buf`；**每当 `len(buf) > CHIP(1200)`** 就切一满片 `_send_chip(chip, last=False)`（严格大于 → 被发片后面一定还有字节，保证非末片）。
+3. **EOF/中途错误** → `_flush_last(buf)`：把剩余按 `CHIP` 切、**仅最后一片置 LAST**（空 `buf` 也发一个空末片）。保证"恰好一个末片"不变式。
+4. 每片：`load = bytes([0x30 | (LAST?)]) + chip`（HTTP_RESPONSE），`build_data_packet(..., PIDs=pids, HMAC种子=random_num)` → `sender.send(return_ip, pkt)`；`C=(1 if 有种子 else 0)`、`R=(1 if 跨域 else 0)` 由 `build_data_packet` 依 `pids/hmac_seed` 自动置位。顺序发送一次，无 ACK、无重传（v1）。
+5. 失败处理：**首片发出前** `OSError`（源站不可达）→ 把合成的 `502 Bad Gateway` 当整份响应经 `_flush_last` 流式发回（消费端无需特判）；**已发若干片后**中途失败 → 记 warning 并用已到达尾部收尾（best-effort 截断）。
+- 收益：浏览器首字节时延从"整份源站下载时间"降到"约一个源站往返 + 首片"，提供端内存占用从"整份响应"降到"一个分片量级"。契约不变（分片无序号、仅 `LAST` 结束标志，仍假设按序不丢包）。验证见 `tests/test_streaming_ttfb.py`。
 
 ### 2.10 复用 / 新增 一览
 | 能力 | 处理 | 位置 |

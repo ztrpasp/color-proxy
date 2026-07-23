@@ -65,10 +65,10 @@ PRD-v1 已批准。与请求端相关的锁定决策：
 2. 发 **GET**：`NSID/LSID/nid=NID_C`，`S=1` 且 `SegID=本次tx`，发往 RM（`SendIpv4(GetRMip(), ...)`）。记 `pending[(SID,NID_C)]=浏览器socket`（与服务端键一致，串行）。
 3. 收 **隧道DATA(B=0, load[0]=TUNNEL)**：从包头 `PID_List` 提取 PID 序列。
 4. 发 **ACK(B=1)**：`nid_pro=该 SID 的提供方NID`、`nid_cus=NID_C`、`SegID=tx`、`PIDs=按现有 ACK 约定的反向路径`（参考现有 ACK 构造 `RecvDataPkt.PIDs[1:][::-1]`）、`load=bytes([0x20|0x01])+完整HTTP请求字节`（HTTP_REQUEST|LAST）。
-5. 收 **响应DATA(B=0, load[0]=HTTP_RESPONSE)**：按到达顺序拼接 `load[1:]`，遇 `LAST` 结束，原样写回浏览器 TCP，关闭/复用连接。
+5. 收 **响应DATA(B=0, load[0]=HTTP_RESPONSE)**：**流式 cut-through**——收包线程把每片 `load[1:]` `put` 进 `pending.chip_queue`（末片后再 `put(None)` 作哨兵），工作线程从队列逐片取出**即时写回浏览器 TCP**（`wfile.write+flush`），不再等整份响应；遇哨兵结束、关闭连接。按到达顺序（无序号），契约仍假设按序不丢包。
 
 ### 2.3 超时与错误
-- 步骤 3/5 等待超时 → 对浏览器返回 504（v1 不在 CoLoR 层重传）。
+- 步骤 3 隧道超时 / 步骤 5 **响应首片**超时 → 对浏览器返回 504（v1 不在 CoLoR 层重传）；已开始流式写回 body 后再空闲超时（相邻分片间隔超 `RESPONSE_IDLE_TIMEOUT`）→ best-effort 截断（无法再改状态行）。
 - 未命中 SID 表 → 502/404。
 
 ### 2.4 契约依赖（务必遵守）

@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import queue
 import threading
 from dataclasses import dataclass, field
 
@@ -21,15 +22,17 @@ from .config import ConsumerConfig
 class PendingRequest:
     """一次浏览器请求在 CoLoR 侧的握手上下文。
 
-    收包线程负责填充 ``pids`` / ``return_ip`` / ``response_buf`` 并置事件，
-    发起请求的工作线程在事件上等待并推进握手（GET→隧道→ACK→响应）。
+    收包线程负责填充 ``pids`` / ``return_ip`` 并置 ``tunnel_event``；对响应 DATA
+    则把每个分片 ``put`` 进 ``chip_queue``、末片后再 ``put(None)`` 作哨兵。发起
+    请求的工作线程在隧道事件上等待，随后从 ``chip_queue`` 逐片取出**流式写回
+    浏览器**（GET→隧道→ACK→逐片响应）。
     """
 
     tunnel_event: threading.Event = field(default_factory=threading.Event)
-    response_event: threading.Event = field(default_factory=threading.Event)
     pids: list[int] = field(default_factory=list)  # 隧道 DATA 带回的 PID 序列
     return_ip: str | None = None                    # 发 ACK 的下一跳 IP
-    response_buf: bytearray = field(default_factory=bytearray)  # 拼接的 HTTP 响应
+    # 响应分片队列：元素为分片字节；``None`` 表末片（LAST）已到、流结束
+    chip_queue: "queue.Queue[bytes | None]" = field(default_factory=queue.Queue)
 
 
 class ConsumerState:
