@@ -10,6 +10,8 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ..protocol.sid import service_canonical
+
 #: HTTP 正向代理默认监听端口（用户在浏览器/系统里把 HTTP 代理指向它）
 DEFAULT_PROXY_PORT = 8910
 
@@ -33,6 +35,27 @@ class StaticSid:
 
 
 @dataclass(frozen=True)
+class StaticService:
+    """预置的服务级 SID（``l3.static_services[]``，docs/design-l3-v2.md §9.2）。
+
+    消费端**正常不需要**静态服务表：它从 tun 观察到目的三元组后自行拼串算 L_sid，
+    再查 RM 下发的 SID 表拿 N_sid（§3.5 的隐私特性）。本项是 §9.2 点名的"SID 表未
+    就绪时的降级路径"：没有 RM 的环境里，不预置就每个包都 ``sid_miss``，L3 一步也
+    走不动。
+
+    与 ``sids[]``（内容级，按 URL）并列而不是合并：两者的 L_sid 算法不同
+    （``SHA1(url)`` vs ``SHA1("<proto>://<ip>:<port>")``），混在一个列表里只会让人
+    写错哪一种。
+    """
+
+    proto: str
+    ip: str
+    port: int
+    provider_nid: int
+    desc: str = ""
+
+
+@dataclass(frozen=True)
 class ConsumerL3Config:
     """消费端 L3 隧道模式配置段（``l3``，docs/design-l3-v2.md §9.2）。"""
 
@@ -50,6 +73,8 @@ class ConsumerL3Config:
     tunnel_redetect_sec: float = 0.0
     #: 联调开关：放行 ICMP 进隧道，用 ping 做最小连通性判据（§8.2）。跑通后应关掉。
     debug_tunnel_icmp: bool = False
+    #: SID 表未就绪时的降级路径（§9.2）。为空则完全依赖 RM 下发的表。
+    static_services: tuple[StaticService, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -147,6 +172,24 @@ def _load_l3(data: dict | None, rm_ipv4: str) -> ConsumerL3Config:
             )
         capture_routes.append(str(network))
 
+    static_services: list[StaticService] = []
+    for index, entry in enumerate(data.get("static_services", [])):
+        where = f"l3.static_services[{index}]"
+        try:
+            canonical = service_canonical(entry.get("proto"), entry.get("ip"), entry.get("port"))
+        except ValueError as exc:
+            raise ValueError(f"{where} 不合法：{exc}") from exc
+        try:
+            provider_nid = int(str(entry["provider_nid"]), 16)
+        except (KeyError, ValueError) as exc:
+            raise ValueError(f"{where}.provider_nid 不是合法的十六进制 NID：{exc}") from exc
+        proto, rest = canonical.split("://", 1)
+        ip, port = rest.rsplit(":", 1)
+        static_services.append(StaticService(
+            proto=proto, ip=ip, port=int(port), provider_nid=provider_nid,
+            desc=str(entry.get("desc", "")),
+        ))
+
     if enabled:
         if not tun_ip:
             raise ValueError("l3.enabled 时必须配 l3.tun_ip（内层包的源地址就是它）")
@@ -168,6 +211,7 @@ def _load_l3(data: dict | None, rm_ipv4: str) -> ConsumerL3Config:
         firstpkt_queue_bytes=int(data.get("firstpkt_queue_bytes", L3_DEFAULT_QUEUE_BYTES)),
         tunnel_redetect_sec=float(data.get("tunnel_redetect_sec", 0.0)),
         debug_tunnel_icmp=bool(data.get("debug_tunnel_icmp", False)),
+        static_services=tuple(static_services),
     )
 
 

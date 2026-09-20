@@ -338,6 +338,82 @@ def test_consumer_lookup_by_service_falls_back_to_wildcard() -> None:
     assert state.lookup_by_service("tcp", "172.10.0.9", 21) is None
 
 
+def test_static_services_preload_yields_the_same_sid_as_the_provider_publishes() -> None:
+    """``l3.static_services[]`` 算出的 SID 必须与提供端 ANN 发布的逐字节一致。
+
+    这是 SID 表未就绪时的降级路径（§9.2）。算错一个字节的症状是"SID 永远对不上"、
+    每个包都 sid_miss，而两端配置看着都对——正是最难查的那一类，故用向量钉住。
+    """
+    import json
+    import tempfile
+    from colorproxy.consumer.config import load_consumer_config
+    from colorproxy.protocol.sid import sid_hex_from_service
+
+    provider_nid = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    document = {
+        "nid": "b2" * 16, "ipv4": "10.10.0.2", "rm_ipv4": "10.10.0.1",
+        "l3": {
+            "enabled": True, "tun_ip": "10.99.1.1",
+            "capture_routes": ["172.10.9.2/32"],
+            "static_services": [
+                {"proto": "tcp", "ip": "172.10.9.2", "port": 8000,
+                 "provider_nid": provider_nid, "desc": "端点级 HTTP"},
+            ],
+        },
+    }
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
+                                     encoding="utf-8") as handle:
+        json.dump(document, handle)
+        path = handle.name
+    config = load_consumer_config(path)
+
+    assert len(config.l3.static_services) == 1
+    service = config.l3.static_services[0]
+    assert (service.proto, service.ip, service.port) == ("tcp", "172.10.9.2", 8000)
+    assert sid_hex_from_service(service.provider_nid, service.proto, service.ip,
+                                service.port) == sid_hex_from_service(
+        int(provider_nid, 16), "tcp", "172.10.9.2", 8000)
+
+
+def test_static_services_normalise_and_fail_fast() -> None:
+    """归一化与 fail-fast：前导零 IP、非 tcp/udp、缺 provider_nid 一律拒绝启动。"""
+    import json
+    import tempfile
+    from colorproxy.consumer.config import load_consumer_config
+
+    def _load(entry):
+        document = {
+            "nid": "b2" * 16, "ipv4": "10.10.0.2", "rm_ipv4": "10.10.0.1",
+            "l3": {"enabled": True, "tun_ip": "10.99.1.1",
+                   "capture_routes": ["172.10.9.2/32"], "static_services": [entry]},
+        }
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
+                                         encoding="utf-8") as handle:
+            json.dump(document, handle)
+            path = handle.name
+        return load_consumer_config(path)  # 必须等文件关闭后再读，否则读到空文件
+
+    good = "a1" * 16
+    # 端口给成字符串是人手写配置时的常见写法，必须归一化而不是算出另一个哈希
+    config = _load({"proto": "tcp", "ip": "172.10.9.2", "port": "8000",
+                    "provider_nid": good})
+    assert config.l3.static_services[0].port == 8000
+
+    for bad, why in (
+        ({"proto": "http", "ip": "172.10.9.2", "port": 8000, "provider_nid": good},
+         "协议必须是 tcp/udp"),
+        ({"proto": "tcp", "ip": "172.010.9.2", "port": 8000, "provider_nid": good},
+         "前导零 IP"),
+        ({"proto": "tcp", "ip": "172.10.9.2", "port": 8000}, "缺 provider_nid"),
+    ):
+        try:
+            _load(bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"应当拒绝启动：{why}")
+
+
 def _run_all() -> int:
     funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

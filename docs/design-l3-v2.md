@@ -796,7 +796,11 @@ TCP 握手涉及 MSS clamp 与双向隧道，故障面比 ICMP 大。如果 M2 �
     "tun_mask": "255.255.255.0",
     "tun_mtu": 1280,
     "mss_clamp": 1240,
-    "capture_routes": ["172.10.0.2/32"],
+    "capture_routes": ["172.10.9.2/32"],
+    "static_services": [
+      { "proto": "tcp", "ip": "172.10.9.2", "port": 8000,
+        "provider_nid": "<提供方 32hex>", "desc": "SID 表未就绪时的降级路径" }
+    ],
     "tunnel_timeout_sec": 5.0,
     "firstpkt_queue_pkts": 4,
     "firstpkt_queue_bytes": 8192,
@@ -808,7 +812,9 @@ TCP 握手涉及 MSS clamp 与双向隧道，故障面比 ICMP 大。如果 M2 �
 
 `capture_routes` **只写 `/32` 主机路由**，理由见 §2.4。进程启动时校验：每条 capture_route 都不得包含 `rm_ipv4`，同步到 `PeerProxys`/`PXs` 后再校验一次，命中则拒绝启动并打印原因。
 
-消费端**不需要**静态服务列表：它从 tun 观察到目的地址后自行拼串算 L_sid，再查 RM 下发的 SID 表拿 N_sid（§3.5）。联调期可加可选的 `static_services[]` 作为 SID 表未就绪时的降级路径。
+消费端**不需要**静态服务列表：它从 tun 观察到目的地址后自行拼串算 L_sid，再查 RM 下发的 SID 表拿 N_sid（§3.5）。
+
+`static_services[]` 是 SID 表未就绪时的降级路径，**rev.4 起已实现**（在此之前它只是一句设计文字，`_preload_static_sids` 只认 URL；没有 RM 的环境里消费端拿不到服务级 SID，每个包都 `sid_miss`，L3 一步也走不动）。它与 `sids[]`（内容级，按 URL）并列而不合并：两者的 L_sid 算法不同（`SHA1(url)` vs `SHA1("<proto>://<ip>:<port>")`），混在一个列表里只会让人写错哪一种。加载时按 §3.1 归一化并 fail-fast——算错一个字节的症状是"SID 永远对不上"，而两端配置看着都对。
 
 `tun_ip` 必须与提供端 `peers[]` 里为本消费端 NID 登记的地址**逐字节一致**（D14）：不一致时隧道能建起来、上行也发得出去，但每个包都会在提供端的来源校验上被 `src_bind_drop` 拦掉。这是 rev.3 引入的新的"两份配置必须对齐"约束，与 §9.3 第 1 条同类，部署清单里要单列一行。
 
@@ -916,7 +922,7 @@ tun_rx / tun_tx / sid_hit / sid_miss / tunnel_up
 | **M0** ✅ | 冻结本契约；`WEB_MSG_TYPE_MASK` 扩展；`_l3_services` / `peers[]` 两张表与配置校验；修掉 §9.3 的四个 v1 遗留问题 | v1 全部测试仍然全绿 |
 | **M1a** ✅ | Wintun 封装 + `ipv4.py`（含 MF/frag_off）+ `mss.py` + `sid.py`，纯逻辑单测 | §3.4 测试向量全部命中；MSS clamp 后 TCP 校验和正确；分片包被正确识别 |
 | **M1b** ✅ | **注入验证**（`tools/l3_m1b_inject.py`）：提供端起 tun，直接 `write(color0)` 一个伪造 TCP SYN（src `10.99.1.1`，dst `172.10.0.2:8000`），看能否读回 SYN-ACK | **2026-09-20 已通过**。并查出 rev.2 §2.3 的错误（只开 color0 不够）与第五种同症状故障（服务地址不在本机）。脚本另做两个判据：半开连接检查分开「没进协议栈」与「回不来」；A/B 改用 tun 自身地址定位跨网卡投递 |
-| **M1c** ◑真机 | **`tools/l3_m1c_loopback.py`**。rev.2 设想的「一台机器两个 tun」**不成立**：同一个内核上两个内层端点都是本机地址（服务地址是提供端 color0 的、消费端 tun 地址是消费端 color0 的），客户端 `connect` 被直接投给本地协议栈、回程也走环回，**TCP 会建成功但一个包都没进隧道**。改为两半各留一个真实端点，两半依次跑；有第二台机器时 `--peer` 跑完整单流 | 半 P：一次完整 HTTP 请求-响应穿过真 tun + 真内核注入 + 真源站；半 C：真客户端 `connect()` 完成并拿到响应，内核 SYN 的 MSS ≤ 1240。`--dry-run`（两侧均 LoopbackTun、免管理员）**2026-09-21 已通过**；同日真机**半 C 已通过**，半 P 的链路也已打通（真实 HTTP 200 穿过真 tun 回来了）、只因撞上机器上另一个占用 8000 的源站而判据报假失败，已修，待重跑 |
+| **M1c** ✅**真机** | **`tools/l3_m1c_loopback.py`**。rev.2 设想的「一台机器两个 tun」**不成立**：同一个内核上两个内层端点都是本机地址（服务地址是提供端 color0 的、消费端 tun 地址是消费端 color0 的），客户端 `connect` 被直接投给本地协议栈、回程也走环回，**TCP 会建成功但一个包都没进隧道**。改为两半各留一个真实端点，两半依次跑；有第二台机器时 `--peer` 跑完整单流 | 半 P：一次完整 HTTP 请求-响应穿过真 tun + 真内核注入 + 真源站；半 C：真客户端 `connect()` 完成并拿到响应，内核 SYN 的 MSS ≤ 1240。**2026-09-21 两半真机全部通过**（第三跑）。期间查实两件事：color0 自己的两个弱主机开关仍需开启（§2.3 勘误）；tun 上的广播/组播噪声此前全计进了 `sid_miss`，已单列 `nonunicast_drop` |
 | **M2** ✅代码 | 两端装配接入 L3（`l3/service.py`、`provider.py`、`consumer/consumer.py`）：按 SID 分派（D13）、tun 读线程、周期任务；另补齐 §2.4 的第二道路由隔离校验 | 离线：`tests/test_l3_assembly.py` 12/12。**真机待 RM/BR 环境**：`Test-NetConnection 172.10.9.2 -Port 8000` 通 → `curl http://172.10.9.2:8000/hello.html` 通；伪造内层 src 的包被 `src_bind_drop` 拦下 |
 | **M3** ✅ | 首包缓冲、握手超时回收（由 ticker 统一拉起）、分片与 `mtu_drop` 计数、计数器日志（内容没变就不打）；另实现 §8.4 的下行静默重探 | 隧道建立失败有明确日志；大 UDP 计入 `frag_drop` 而非无声消失；`tests/test_l3_assembly.py` 覆盖超时确实被扫、重探确实原子替换 |
 | **M4** ◑离线 | 三个验收用例。**真客户端需要两台机器**（理由同 M1c），单机能做的部分已成离线回归 | 离线：`tests/test_l3_acceptance.py` 8/8——被动 FTP 的两条独立隧道与不串台、通配只放宽目的粒度、UDP 1252 边界与分片计数、长连接共用隧道。真机步骤与判据见 `docs/M4-acceptance.md` |

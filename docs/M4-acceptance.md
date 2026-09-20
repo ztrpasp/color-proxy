@@ -2,8 +2,8 @@
 
 > 对应 `docs/design-l3-v2.md` §11 的 M4：**被动 FTP 上传下载 / 一条视频流连续 5 分钟 /
 > MySQL 增删改查**。
-> 前置：M2 的两端装配已完成（`colorproxy/l3/service.py`），M1c 两半已在真机通过
-> （2026-09-21：半 C 已通过，半 P 待重跑，见 `docs/HANDOVER-l3.md` §4①）。
+> 前置：M2 的两端装配已完成（`colorproxy/l3/service.py`），M1c 两半**已在真机通过**
+> （2026-09-21）。
 > 截至 2026-09-21。
 
 ---
@@ -84,7 +84,12 @@ python -m colorproxy.consumer.main config-consumer.json -v
 | 服务地址 | `l3.services[].ip` | `capture_routes` 覆盖它 | 流量不进 tun，或进了算不出 SID（`sid_miss`） |
 | MTU / MSS | 1280 / 1240 | 1280 / 1240 | 小请求正常、一传大数据就卡死（§6.2） |
 
-### 最小连通性判据（做完再往下）
+### 最小连通性判据：用 HTTP 测 L3（做完再往下）
+
+HTTP 比 FTP / 视频 / 数据库都好测，而且**它本来就能当端点级服务发**——`config.json`
+里那条 `{ "proto": "tcp", "ip": "172.10.9.2", "port": 8000 }` 就是。L3 这一侧根本不看
+HTTP：它从内层 IP 头读 `(proto, dst_ip, dst_port)` 就去算哈希了，载荷是 HTTP 还是
+MySQL 协议它不关心。
 
 ICMP 不走隧道（D11），所以**不能用 ping**。用 TCP：
 
@@ -92,6 +97,33 @@ ICMP 不走隧道（D11），所以**不能用 ping**。用 TCP：
 Test-NetConnection 172.10.9.2 -Port 8000      # 只看三次握手
 curl http://172.10.9.2:8000/hello.html
 ```
+
+> ⚠ **curl / 浏览器绝对不能配 `:8910` 代理。** 配了就走 v1 内容级那条路了，测的是
+> 另一套机制。消费端分辨两种粒度**不靠 URL，靠流量从哪个入口进来**：
+>
+> | | 内容级（v1） | 服务级（L3） |
+> |---|---|---|
+> | 入口 | HTTP 正向代理 `:8910` | tun 设备 + 主机路由 |
+> | 查表键 | `SHA1(去 query 的 URL)` | `SHA1("tcp://ip:port")` |
+> | 代码 | `consumer/proxy.py` → `lookup_by_url()` | `l3/consumer.py` → `lookup_by_service()` |
+>
+> 两者查同一张 `_sid_table`，不冲突是因为哈希域按 scheme 天然隔离（内容级恒为
+> `http`/`https`，服务级恒为 `tcp`/`udp`，§3.1/D12）。所以**同一个源站可以两种粒度
+> 同时发布**，互不干扰——这正好是一组 A/B 对照。
+
+**没有 RM 时**消费端拿不到服务级 SID（每个包都 `sid_miss`）。用 §9.2 的降级路径，在
+`config-consumer.json` 的 `l3` 段预置：
+
+```json
+"static_services": [
+  { "proto": "tcp", "ip": "172.10.9.2", "port": 8000,
+    "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1" }
+]
+```
+
+注意这只解决"SID 表"这一个环节。**握手仍要发 GET 给 RM**，所以完整链路依旧需要
+RM/BR；不接 CoLoR 而只想验内层链路的话，跑 `tools/l3_m1c_loopback.py`（它已经做了
+一次完整的 HTTP 请求-响应穿过真 tun）。
 
 ---
 

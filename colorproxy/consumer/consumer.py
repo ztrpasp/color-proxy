@@ -12,7 +12,7 @@ import time
 from .. import registration
 from ..l3.service import ConsumerL3Service
 from ..protocol.constants import CONTROL_FIRST_BYTE, DATA_FIRST_BYTE
-from ..protocol.sid import sid_hex_from_url
+from ..protocol.sid import service_canonical, sid_hex_from_service, sid_hex_from_url
 from ..transport.receiver import ColorReceiver
 from ..transport.sender import ColorSender
 from ..tun.device import TunDevice
@@ -99,11 +99,24 @@ class Consumer:
         )
 
     def _preload_static_sids(self) -> None:
-        """把配置里的静态 SID 预载入本域 SID 表（联调用，见 config.sids）。"""
+        """把配置里的静态 SID 预载入本域 SID 表（联调用）。
+
+        两种粒度分开预载，因为 L_sid 的算法不同（§0.2）：``sids[]`` 走
+        ``SHA1(url)``，``l3.static_services[]`` 走 ``SHA1("<proto>://<ip>:<port>")``。
+        两者进的是同一张表——哈希域按 scheme 天然隔离，不会撞（§3.1，D12）。
+        """
         for entry in self.config.sids:
             self.state.add_sid(sid_hex_from_url(entry.provider_nid, entry.url))
         if self.config.sids:
-            logger.info("已预载 %d 条静态 SID（联调用）", len(self.config.sids))
+            logger.info("已预载 %d 条内容级静态 SID（按 URL，联调用）", len(self.config.sids))
+
+        for service in self.config.l3.static_services:
+            sid = sid_hex_from_service(
+                service.provider_nid, service.proto, service.ip, service.port)
+            self.state.add_sid(sid)
+            logger.info("已预载服务级静态 SID：%s%s (SID=%s…)",
+                        service_canonical(service.proto, service.ip, service.port),
+                        f" [{service.desc}]" if service.desc else "", sid[:16])
 
     def _on_payload(self, payload: bytes) -> None:
         """收包回调（运行在接收线程）。按首字节分发。"""
