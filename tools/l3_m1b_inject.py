@@ -149,20 +149,46 @@ def list_adapters() -> list[str]:
     return [item.strip() for item in output.split("|") if item.strip()]
 
 
-def check_local_address(ip: str) -> tuple[bool, str]:
-    """目标服务地址是否真的配在本机某个接口上。
+def check_local_address(ip: str) -> tuple[bool, str, str | None]:
+    """目标服务地址是否真的配在本机某个接口上、且处于可用状态。
 
     这一条设计的 §11 M1b 没列，但在开发机上最容易先撞到：按 D9 发布的是提供端**物理
     网卡地址**（172.10.0.2），若本机根本没有这个地址，内层包递上来后既不是本机地址、
     也没有转发目标，会被直接丢弃——症状和弱主机模型丢弃一模一样，但病因完全不同。
+
+    也查 ``AddressState``：刚加上的地址若处于 Tentative/Duplicate（DAD 未通过），
+    存在但不可用，症状同样是静默丢包。
+
+    返回 ``(是否可用, 说明, 持有该地址的接口别名)``。
     """
     code, output = _powershell(
-        f"(Get-NetIPAddress -IPAddress '{ip}' -ErrorAction SilentlyContinue"
-        " | Select-Object -ExpandProperty InterfaceAlias) -join ','"
+        f"$a = Get-NetIPAddress -IPAddress '{ip}' -AddressFamily IPv4 -ErrorAction Stop"
+        " | Select-Object -First 1; ($a.InterfaceAlias, $a.AddressState) -join '|'"
+    )
+    if code != 0 or "|" not in output:
+        return False, f"{ip} 不在本机任何接口上", None
+    alias, address_state = (part.strip() for part in output.split("|", 1))
+    if address_state.lower() != "preferred":
+        return False, f"{ip} 在 {alias} 上但状态是 {address_state}（非 Preferred，不可用）", alias
+    return True, f"{ip} 配在 {alias}（{address_state}）", alias
+
+
+def half_open_connections(port: int) -> list[str]:
+    """查目标端口上的非 Listen 连接。
+
+    这是把问题一刀切开的判据：注入后若出现 ``SynReceived``，说明 SYN **已经进了 TCP
+    协议栈**（注入、投递、WFP 入站、监听地址全都成立），问题只在回程；若什么都没有，
+    说明 SYN 根本没被协议栈接受。
+    """
+    code, output = _powershell(
+        f"(Get-NetTCPConnection -LocalPort {port} -ErrorAction SilentlyContinue"
+        " | Where-Object { $_.State -ne 'Listen' } | ForEach-Object"
+        ' { "$($_.LocalAddress):$($_.LocalPort)<-$($_.RemoteAddress):$($_.RemotePort) $($_.State)" })'
+        " -join '|'"
     )
     if code != 0 or not output:
-        return False, f"{ip} 不在本机任何接口上"
-    return True, f"{ip} 配在 {output}"
+        return []
+    return [item.strip() for item in output.split("|") if item.strip()]
 
 
 def check_firewall(alias: str) -> tuple[bool, str]:
@@ -188,34 +214,54 @@ def build_syn(src: str, dst: str, dport: int, sport: int, mss: int) -> bytes:
 
 def wait_for_reply(device: WintunDevice, src: str, dst: str, dport: int, sport: int,
                    timeout: float) -> tuple[str, bytes | None]:
-    """等回程包。返回 ('synack'|'rst'|'timeout'|'other', 原始包)。
+    """等回程包。返回 ('synack'|'rst'|'timeout', 原始包)。
 
     收到 RST 是个**好消息**：说明注入、投递、回程路由这条链路是通的，只是那个端口
     上没人监听——能把"投递坏了"和"服务没起"彻底分开。
     """
     deadline = time.monotonic() + timeout
-    seen: list[str] = []
+    seen: dict[str, int] = {}
     while time.monotonic() < deadline:
         packet = device.read(timeout=max(0.05, deadline - time.monotonic()))
         if packet is None:
             continue
         header = ipv4.parse_header(packet)
-        if header is None or header.proto != ipv4.PROTO_TCP:
-            seen.append(f"非 TCP(proto={header.proto if header else '?'})")
+        if header is None:
+            # 区分 IPv6 与真正的坏包：新接口上大量 IPv6 RS/MLD 是正常噪声，
+            # 早先笼统报成 "proto=?" 会误导排查方向
+            version = (packet[0] >> 4) if packet else 0
+            seen[f"IPv{version}" if version in (4, 6) else f"坏包(首字节0x{packet[0]:02x})"] = (
+                seen.get(f"IPv{version}" if version in (4, 6) else f"坏包(首字节0x{packet[0]:02x})", 0) + 1
+            )
+            continue
+        if header.proto != ipv4.PROTO_TCP:
+            seen[f"IPv4/proto={header.proto}"] = seen.get(f"IPv4/proto={header.proto}", 0) + 1
             continue
         ports = ipv4.parse_ports(packet, header)
         if ipv4.format_ipv4(header.src) != dst or ports != (dport, sport):
-            seen.append(f"无关包 {ipv4.format_ipv4(header.src)}:{ports}")
+            key = f"无关 TCP {ipv4.format_ipv4(header.src)}:{ports}"
+            seen[key] = seen.get(key, 0) + 1
             continue
         flags = IP(packet)[TCP].flags
         if flags.S and flags.A:
             return "synack", packet
         if flags.R:
             return "rst", packet
-        seen.append(f"标志={flags}")
+        seen[f"本流但标志={flags}"] = seen.get(f"本流但标志={flags}", 0) + 1
     if seen:
-        logger.info("期间读到 %d 个不相关的包：%s", len(seen), seen[:5])
+        summary = "、".join(f"{key}×{count}" for key, count in sorted(seen.items()))
+        logger.info("期间从 tun 读到的其它包：%s", summary)
+        logger.info("（IPv6 是新接口的 RS/MLD 噪声，属正常；出现它说明 tun 读通路是活的）")
     return "timeout", None
+
+
+def attempt(device: WintunDevice, inner_src: str, dst: str, port: int, sport: int,
+            mss: int, timeout: float) -> tuple[str, bytes | None]:
+    """注入一个 SYN 并等回应。"""
+    syn = build_syn(inner_src, dst, port, sport, mss)
+    print(f"注入 TCP SYN：{inner_src}:{sport} → {dst}:{port}（{len(syn)} 字节，MSS={mss}）…")
+    device.write(syn)
+    return wait_for_reply(device, inner_src, dst, port, sport, timeout)
 
 
 def main() -> int:
@@ -262,7 +308,8 @@ def main() -> int:
     print("=" * 72)
 
     # --- 先查两件不依赖 tun 的：目标地址在不在本机、源站听在哪 --------------
-    address_ok, address_note = check_local_address(service_ip)
+    address_ok, address_note, service_alias = check_local_address(service_ip)
+    service_alias = service_alias or "<目标地址所在网卡>"
     print(f"[{'OK' if address_ok else '!!'}] 目标地址归属：{address_note}")
     if not address_ok:
         print(f"     按 D9，发布的是提供端物理网卡地址。本机没有 {service_ip} 的话，内层包")
@@ -306,17 +353,14 @@ def main() -> int:
         firewall_ok, firewall_note = check_firewall(l3.tun_name)
         print(f"[{'OK' if firewall_ok else '!!'}] 防火墙/网络类别（§2.6 第 3 条）：{firewall_note}")
 
-        syn = build_syn(inner_src, service_ip, port, args.sport, l3.mss_clamp)
-        print(f"\n注入 TCP SYN（{len(syn)} 字节，MSS={l3.mss_clamp}）…")
-        device.write(syn)
-
-        verdict, packet = wait_for_reply(
-            device, inner_src, service_ip, port, args.sport, args.timeout
+        print()
+        verdict, packet = attempt(
+            device, inner_src, service_ip, port, args.sport, l3.mss_clamp, args.timeout
         )
         print()
         if verdict == "synack":
             print("=" * 72)
-            print("✅ 通过：读回了 SYN-ACK。注入、投递、源站、回程路由四件事都成立。")
+            print("✅ 通过：读回了 SYN-ACK。注入、跨网卡投递、源站、回程路由全都成立。")
             print(f"   {IP(packet).summary()}")
             print("   下一步做 M1c（两个 tun + UDP 代替 CoLoR），或直接进 M2 接入 CoLoR。")
             print("=" * 72)
@@ -328,20 +372,64 @@ def main() -> int:
             print(f"   起一个最小源站再跑一次：python -m http.server {port} --bind 0.0.0.0")
             print("=" * 72)
             return 1
+
+        # ---- 失败后的两个决定性判据 --------------------------------------
+        print("-" * 72)
+        print("SYN 没有回应。下面两步把「没进协议栈」和「回不来」分开：")
+
+        half_open = half_open_connections(port)
+        if half_open:
+            print(f"[>>] 协议栈里出现了半开连接：{half_open}")
+            print("     → SYN **已经进了 TCP 协议栈**（注入/跨网卡投递/WFP 入站/监听地址全成立），")
+            print(f"        问题只在回程：SYN-ACK 的源地址是 {service_ip}（属于 {service_alias}），")
+            print(f"        要从 {l3.tun_name} 发出，需要 {l3.tun_name} 的 weakhostsend；")
+            print(f"        并确认 {l3.peer_routes} 指向 {l3.tun_name}（route print）。")
+        else:
+            print(f"[>>] 协议栈里没有 :{port} 上的半开连接 → SYN 没被协议栈接受。")
+
+        # 跨网卡投递到底要哪一端的 weakhost，设计文档只写了"在 color0 上打开"，
+        # 实测比推断可靠，所以把两端都摆出来
+        if address_ok:
+            here = interface_state(l3.tun_name)
+            peer = interface_state(service_alias)
+            print("[>>] 两端的弱主机开关：")
+            print(f"       {l3.tun_name}（收包侧）      recv={here['weak_host_receive']} "
+                  f"send={here['weak_host_send']}")
+            print(f"       {service_alias}（地址持有侧） recv={peer['weak_host_receive']} "
+                  f"send={peer['weak_host_send']}")
+
+        # A/B：改用 color0 自己的地址。源站 bind 0.0.0.0，所以它也在听这个地址。
+        print(f"\n[A/B] 改用 {l3.tun_name} 自己的地址 {l3.tun_ip} 再注入一次"
+              "（这条路径不需要跨网卡投递，即 §2.5 的虚服务地址方案）…")
+        alt_verdict, _alt = attempt(
+            device, inner_src, l3.tun_ip, port, args.sport + 1, l3.mss_clamp, args.timeout
+        )
+        print()
         print("=" * 72)
-        print("❌ 超时：没读回 SYN-ACK 也没读回 RST。按下面的顺序查（症状完全一样，逐个排除）：")
-        for ok, name, hint in (
-            (address_ok, "目标地址在本机", f"{service_ip} 不在本机任何接口上，见上面的说明"),
-            (weak_ok, "弱主机模型开关", "见上面 warn_if_weak_host_disabled 打印的两条 netsh 命令"),
-            (firewall_ok, "防火墙/网络类别",
-             f'Set-NetConnectionProfile -InterfaceAlias "{l3.tun_name}" -NetworkCategory Private；'
-             f'New-NetFirewallRule -DisplayName "color-tun" -Direction Inbound '
-             f'-InterfaceAlias "{l3.tun_name}" -Action Allow'),
-            (listener_ok, "源站监听地址", f"python -m http.server {port} --bind 0.0.0.0"),
-        ):
-            print(f"   [{'OK' if ok else '!!'}] {name}：{'已满足' if ok else hint}")
-        print(f"   [??] 回程路由：确认 {l3.peer_routes} 指向 {l3.tun_name}（route print）")
-        print("   包一路被丢在 WFP 上时，症状与强主机丢弃一模一样，先把上面 !! 的都解决。")
+        if alt_verdict in ("synack", "rst"):
+            print(f"🔍 定位完成：发到 {l3.tun_ip}（tun 自己的地址）有回应（{alt_verdict}），")
+            print(f"   发到 {service_ip}（{service_alias} 的地址）没有回应。")
+            print("   → tun 读写、注入、WFP 入站、源站、回程路由**全都是好的**，")
+            print("     唯一不成立的是**跨网卡投递**，即 §1.4 第二行那一跳。")
+            print()
+            print("   两条路可选：")
+            print(f"   (a) 把弱主机开关也打到目标地址所在的网卡上，再试一次：")
+            print(f'         netsh interface ipv4 set interface "{service_alias}" '
+                  "weakhostreceive=enabled")
+            print(f'         netsh interface ipv4 set interface "{service_alias}" '
+                  "weakhostsend=enabled")
+            print("   (b) 直接走 §2.5 的备用方案：把服务发布在 tun 自己的地址上，")
+            print(f'         即 l3.services[].ip 改成 {l3.tun_ip}，两个弱主机开关都不需要。')
+            print("       代价只是对外发布的是虚地址而非物理地址，其余契约完全相同。")
+        else:
+            print("❌ 两个目标地址都没有回应 → 问题比「跨网卡投递」更靠前。")
+            print("   已排除的：目标地址存在且 Preferred、源站监听 0.0.0.0、")
+            print(f"   {l3.tun_name} 的两个弱主机开关已开、网络类别为 Private。")
+            print("   接下来用 pktmon 看包死在哪个组件（管理员）：")
+            print("     pktmon start --capture --drop-only --pkt-size 128")
+            print("     python tools/l3_m1b_inject.py --configure")
+            print("     pktmon stop && pktmon format PktMon.etl -o drops.txt")
+            print("   drops.txt 会直接写出丢包组件与原因（WFP / IP 层等），贴出来即可继续定位。")
         print("=" * 72)
         return 1
     finally:
