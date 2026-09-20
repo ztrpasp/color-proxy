@@ -11,7 +11,8 @@
 - 回程隧道改为**由内层源三元组反推 SID**，删除 `PeerTun` 数据面学习，新增内层源地址静态绑定校验（§7.2、§7.3，D14）；
 - 内层 IP 分片：**首片与非首片一律显式丢弃 + `frag_drop` 计数**，不做重组（§7.1，D15）；
 - §6.3 的 ICMP 3/4 由「必须实现」降级为防御性实现（D16）；
-- §6.1 头部预算按实际报文重算（rev.2 漏算 `Source_NID` / `HMAC` / `Segment_ID` / 尾部保留 PID）。
+- §6.1 头部预算按实际报文重算（rev.2 漏算 `Source_NID` / `HMAC` / `Segment_ID` / 尾部保留 PID）；
+- **§2.3 按 M1b 实测修正**：弱主机开关必须在 color0 与服务地址所在网卡**两边**都打开，rev.2 的「仅 color0」不成立（§2.3 附对照实验）。
 
 **rev.2 变更**：服务地址改回物理地址 + 弱主机模型开关（§2.3）；规范服务串去掉 `color://` 前缀（§3.1，**rev.3 已由 D12 取代**）；ICMP 不做隧道传输（§8.2）；新增 §1 架构总览。
 
@@ -62,7 +63,7 @@ L3 模式把**完整的内层 IP 包**（含 TCP/UDP 头）作为 CoLoR DATA 的
 | D6 | 两份配置文件预配 | 见 §9 |
 | D7 | 先做 **Windows（Wintun）**，后补 Linux | 见 §10.2 |
 | D8 | **HTTP 模式保留** | `load[0]` 类型扩展需向后兼容，见 §4.1 |
-| **D9** | **服务发布用物理地址 `172.10.0.2`，靠弱主机模型开关放行** | 见 §2.3；两条 netsh 命令，仅提供端 |
+| **D9** | **服务发布用物理地址 `172.10.0.2`，靠弱主机模型开关放行** | 见 §2.3；**rev.3 实测修正：需四条 netsh 命令、两张网卡**，仅提供端 |
 | **D10** | **规范服务串去掉 `color://` 前缀** | **rev.3 已由 D12 取代** |
 | **D11** | **ICMP 不做隧道传输** | 见 §8.2；注意与"本地产生 ICMP"区分 |
 | **D12** | **规范服务串统一为 `<proto>://<ipv4>:<port>`** | 见 §3.1；与内容级按 scheme 隔离哈希域；测试向量已重算 |
@@ -221,16 +222,36 @@ Windows 上不使用 raw socket 自发自收的替代路径：XP SP2 之后微�
 
 ### 2.3 弱主机模型开关（D9，仅提供端）
 
-内层包目的 `172.10.0.2` 绑在物理网卡，却从 color0 递上来；回程源地址 `172.10.0.2` 属于物理网卡，却要从 color0 发出。两个方向都违反 Windows 默认的强主机模型，必须在 **color0 上**打开两个开关：
+> **rev.3 实测修正（重要）**：rev.2 这一节写的「仅 color0」**是错的，两个开关只打在 color0 上不够**。2026-09-20 的 M1b 实测（`tools/l3_m1b_inject.py`）证明：必须在 **color0 与"服务地址所在的那张网卡"两边都打开**，否则注入的包进不了 TCP 协议栈（连 RST 都不回），症状与防火墙拦截、源站只听回环完全一样。照 rev.2 逐字部署必然踩这个坑。
+
+内层包目的 `172.10.0.2` 绑在物理网卡，却从 color0 递上来；回程源地址 `172.10.0.2` 属于物理网卡，却要从 color0 发出。两个方向都违反 Windows 默认的强主机模型，必须打开四个开关：
 
 ```powershell
-# 查接口索引
+# 查接口索引/别名
 netsh interface ipv4 show interfaces
 
-# 仅提供端，仅 color0
+# 仅提供端。<svc_if> = 服务地址（172.10.0.2）所在的那张网卡
 netsh interface ipv4 set interface <color0_idx> weakhostreceive=enabled
 netsh interface ipv4 set interface <color0_idx> weakhostsend=enabled
+netsh interface ipv4 set interface <svc_if>     weakhostreceive=enabled
+netsh interface ipv4 set interface <svc_if>     weakhostsend=enabled
 ```
+
+**实测依据**（同一台机器、同一次会话内的三组对照）：
+
+| 目标地址 | color0 两开关 | 服务网卡两开关 | 结果 |
+|---|---|---|---|
+| `10.99.1.254`（color0 自己的地址） | 开 | — | **SYN-ACK** |
+| `172.10.0.2`（另一张网卡的地址） | 开 | 关 | 无任何回应，协议栈里也没有半开连接 |
+| `172.10.0.2` | 开 | 开 | **SYN-ACK** |
+
+第二行是关键：包确实写进了 tun（同期能从 tun 读到 IPv6/IGMP 等正常噪声，读写通路是活的），但 TCP 协议栈根本没接受它。
+
+> 尚未隔离**最小**开关集合：第三组实验里服务网卡的 `weakhostsend` 与 `weakhostreceive` 是一起打开的，所以只能确定"两边都开可行、只开 color0 不行"，不能确定服务网卡侧是否两个都必需。四个全开是安全的超集，部署按上表执行即可。
+
+**安全影响**：在**物理网卡**上打开 weakhostreceive，意味着该网卡会接受目的为本机其它接口地址的包，攻击面比默认的 strong host 略大。真正约束边界的是 §7.3 的逐包准入校验，不是主机模型。
+
+**这也是 §2.5 备用方案更省事的实测证据**：服务发布在 color0 自己的地址上时（上表第一行），**四个开关一个都不需要**。D9 的物理地址方案要换来的代价是两张网卡上的四个系统级开关。
 
 **消费端不需要任何开关**：出向包源地址 `10.99.1.1` 本就属于 color0，回程包目的 `10.99.1.1` 也属于 color0，两个方向都是"收发网卡自己的地址"，强主机模型天然满足。
 
@@ -260,7 +281,9 @@ netsh interface ipv4 set interface <color0_idx> weakhostsend=enabled
 - 对外发布 `tcp://172.10.9.2:8000`；
 - 消费端路由改为 `172.10.9.0/24 → color0`。
 
-此时内层包目的正是 color0 自己的地址，**两个弱主机开关都不需要**，且服务地址段与 RM/BR/物理地址完全不相交，无环路风险。代价是发布的是虚地址而非物理地址。
+此时内层包目的正是 color0 自己的地址，**四个弱主机开关一个都不需要**（§2.3 的对照实验第一行已实测确认），且服务地址段与 RM/BR/物理地址完全不相交，无环路风险。代价是发布的是虚地址而非物理地址。
+
+> rev.3 起本方案的性价比明显高于 D9：省掉两张网卡上的四个系统级开关、省掉在物理网卡上放宽主机模型带来的攻击面，而契约完全相同、切换只改一个配置项。若不是论述上必须强调「发布的是真实物理地址」，建议直接用本方案。
 
 两套方案只差「服务地址取物理还是取 tun 地址」，其余契约完全相同，配置项也一样，切换成本很低。
 
@@ -269,7 +292,11 @@ netsh interface ipv4 set interface <color0_idx> weakhostsend=enabled
 配完环境、起代理之前先过一遍，能省掉大量后续排查：
 
 1. `route print`：确认 `172.10.0.2` 的下一跳是 color0；确认**没有**任何指向 color0 的路由覆盖到 RM、BR、物理地址。
-2. `netsh interface ipv4 show interface <color0_idx>`：确认两个 weakhost 项为 enabled，MTU 为 1280。
+2. **两张网卡**的 weakhost 项都要确认为 enabled——color0 与服务地址所在的那张网卡（§2.3 的实测修正），并确认 color0 的 MTU 为 1280。netsh 的输出是**本地化**的（中文 Windows 打印「弱主机发送 / 弱主机接收」而非 `weakhostsend/weakhostreceive`），按英文键名解析会永远匹配不到，故用与语言无关的：
+   ```powershell
+   Get-NetIPInterface -AddressFamily IPv4 |
+     Select-Object InterfaceAlias, WeakHostSend, WeakHostReceive, NlMtu
+   ```
 3. **防火墙**：Wintun 适配器在 Windows 眼里是新网卡，NLA 大概率归为「公用网络」，入站几乎全拦。包会被正常投递到 IP 层然后死在 WFP 上，症状和强主机丢弃一模一样。原型阶段先放行：
    ```powershell
    Set-NetConnectionProfile -InterfaceAlias "color0" -NetworkCategory Private
@@ -829,7 +856,7 @@ tun_rx / tun_tx / sid_hit / sid_miss / tunnel_up
 |---|---|---|
 | **M0** | 冻结本契约；`WEB_MSG_TYPE_MASK` 扩展；`_l3_services` / `peers[]` 两张表与配置校验；修掉 §9.3 的四个 v1 遗留问题 | v1 全部测试仍然全绿 |
 | **M1a** | Wintun 封装 + `ipv4.py`（含 MF/frag_off）+ `mss.py` + `sid.py`，纯逻辑单测 | §3.4 测试向量全部命中；MSS clamp 后 TCP 校验和正确；分片包被正确识别 |
-| **M1b** | **注入验证**：提供端起 tun，用脚本直接 `write(color0)` 一个伪造 TCP SYN（src `10.99.1.1`，dst `172.10.0.2:8000`），看能否从 color0 读回 SYN-ACK | **不接 CoLoR**，单独验证弱主机开关、防火墙、监听地址、回程路由四件事 |
+| **M1b** ✅ | **注入验证**（`tools/l3_m1b_inject.py`）：提供端起 tun，直接 `write(color0)` 一个伪造 TCP SYN（src `10.99.1.1`，dst `172.10.0.2:8000`），看能否读回 SYN-ACK | **2026-09-20 已通过**。并查出 rev.2 §2.3 的错误（只开 color0 不够）与第五种同症状故障（服务地址不在本机）。脚本另做两个判据：半开连接检查分开「没进协议栈」与「回不来」；A/B 改用 tun 自身地址定位跨网卡投递 |
 | **M1c** | **单机回环**：两个进程 + 两个 tun，中间用 UDP 直连代替 CoLoR | 地址规划、MTU、MSS 全链路打通 |
 | **M2** | 接入 CoLoR：SID 派生、GET/隧道 DATA、上下行数据面、双向准入校验（§7.3） | `Test-NetConnection 172.10.0.2 -Port 8000` 通 → `curl http://172.10.0.2:8000/hello.html` 通；伪造内层 src 的包被 `src_bind_drop` 拦下 |
 | **M3** | 首包缓冲、握手超时、分片丢弃计数、全套计数器（ICMP 3/4 降为可选，D16） | 隧道建立失败有明确日志；大 UDP 计入 `frag_drop` 而非无声消失 |

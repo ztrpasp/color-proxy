@@ -341,12 +341,16 @@ def main() -> int:
 
         if args.configure:
             # color0 由本脚本创建、退出即删，开关挂在它身上，手工设置来不及，故代劳。
-            # 代理进程永远不做这件事（§9.1）。
+            # 服务地址所在的网卡是**长期存在**的，动它属于改系统配置，仍然只告警不代劳
+            # （§9.1）——这也是 §2.3 那条实测修正要部署者自己执行的那两条命令。
             print(f"[--] --configure：准备 {l3.tun_name} 的弱主机开关与防火墙…")
             enable_weak_host(l3.tun_name)
             allow_firewall(l3.tun_name)
 
-        weak_ok = warn_if_weak_host_disabled(l3.tun_name)
+        # 两张网卡都要检查（§2.3 的实测修正）：tun 与服务地址所在的那张
+        weak_ok = warn_if_weak_host_disabled(
+            l3.tun_name, service_alias if address_ok else None
+        )
         print(f"[{'OK' if weak_ok else '!!'}] 弱主机模型（§2.3，D9）："
               f"{'两个开关都已开启' if weak_ok else '未确认开启，见上面的告警'}")
 

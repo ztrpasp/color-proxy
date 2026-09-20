@@ -377,24 +377,38 @@ def interface_state(interface: str) -> dict[str, object | None]:
     }
 
 
-def warn_if_weak_host_disabled(interface: str) -> bool:
-    """提供端启动自检：两个开关都确认开启返回 True，否则打印告警与命令（§2.3，D9）。
+def warn_if_weak_host_disabled(interface: str, service_interface: str | None = None) -> bool:
+    """启动自检：相关接口的两个开关都确认开启返回 True，否则打印告警与命令（§2.3，D9）。
+
+    **必须同时检查两张网卡**（§2.3 的 rev.3 实测修正）：tun 接口，以及服务地址所在的
+    那张网卡。只打开 tun 一侧是不够的——2026-09-20 的 M1b 实测里，包连 TCP 协议栈都
+    进不去（连 RST 都不回），而症状与防火墙拦截、源站只听回环一模一样。
+    ``service_interface`` 为 None 时只检查 tun 一侧，但仍会在告警里提醒另一侧。
 
     按 §9.1：只**检查并告警**，不自动改系统配置——改主机模型影响整机网络行为，
     应由部署者显式执行。
     """
-    state = interface_state(interface)
     labels = {"weak_host_send": "weakhostsend", "weak_host_receive": "weakhostreceive"}
-    missing = [labels[key] for key in labels if state[key] is not True]
-    if not missing:
+    targets = [interface] + ([service_interface] if service_interface else [])
+    incomplete: list[tuple[str, list[str]]] = []
+    for alias in targets:
+        state = interface_state(alias)
+        missing = [labels[key] for key in labels if state[key] is not True]
+        if missing:
+            incomplete.append((alias, missing))
+    if not incomplete:
         return True
+
+    commands = "\n".join(
+        f'  netsh interface ipv4 set interface "{alias}" {switch}=enabled'
+        for alias, missing in incomplete for switch in missing
+    )
     logger.warning(
-        "接口 %s 的 %s 未确认开启。内层包目的是物理网卡地址却从 tun 递上来、回程源地址"
-        "属于物理网卡却要从 tun 发出，两个方向都违反 Windows 默认的强主机模型，包会被"
-        "静默丢弃（症状与防火墙拦截、源站只听 127.0.0.1 一模一样，极难区分）。"
-        "请以管理员执行：\n"
-        '  netsh interface ipv4 set interface "%s" weakhostreceive=enabled\n'
-        '  netsh interface ipv4 set interface "%s" weakhostsend=enabled',
-        interface, " 与 ".join(missing), interface, interface,
+        "弱主机模型开关未确认开启：%s。内层包目的是物理网卡地址却从 tun 递上来、回程源"
+        "地址属于物理网卡却要从 tun 发出，两个方向都违反 Windows 默认的强主机模型，包会"
+        "被静默丢弃（症状与防火墙拦截、源站只听 127.0.0.1 一模一样，极难区分）。"
+        "注意**两张网卡都要开**：tun 与服务地址所在的那张（§2.3）。请以管理员执行：\n%s",
+        "；".join(f"{alias} 缺 {'/'.join(missing)}" for alias, missing in incomplete),
+        commands,
     )
     return False
