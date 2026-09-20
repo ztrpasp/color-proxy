@@ -29,11 +29,15 @@ class Consumer:
         self.sender = ColorSender()
         self.receiver = ColorReceiver(config.ipv4, self._on_payload)
         self.proxy: ProxyServer | None = None
+        # 常驻注册线程（§9.3 第 3 条）。消费端不发布服务，故无 on_registered 回调；
+        # 周期性重注册的收益在于 RM 重启后能重新拿到域内代理表。
+        self.keeper = registration.RegistrationKeeper(self.state, self.sender)
 
     def start(self) -> None:
         """启动收包、向 RM 注册、拉取本域 SID 表，并建好正向代理。"""
         self.receiver.start()
-        if not registration.register(self.state, self.sender):
+        self.keeper.start()
+        if not self.keeper.wait_first():
             raise RuntimeError("无法向 RM 注册，消费端启动失败")
         self._preload_static_sids()
         sid_table.request_sid_list(self.state, self.sender)
@@ -51,6 +55,7 @@ class Consumer:
         if self.proxy is not None:
             self.proxy.shutdown()
             self.proxy.server_close()
+        self.keeper.stop()
         self.receiver.stop()
 
     def _preload_static_sids(self) -> None:

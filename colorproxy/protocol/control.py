@@ -72,6 +72,50 @@ def parse_register_reply(payload: bytes) -> tuple[list[tuple[int, str]], list[tu
     return proxies, brs
 
 
+def parse_proxy_table_strict(payload: bytes) -> tuple[list[tuple[int, str]], list[tuple[int, str]]]:
+    """严格解析"代理/BR 表"布局，不匹配即抛 ``ValueError``。
+
+    与 ``parse_register_reply`` 同一布局，但额外要求解析**恰好**消耗
+    ``Data_Length``(bytes 6-7 小端) 个字节。用于处理布局未经证实的子类型
+    （如新代理通知 tag=8）：宁可报错让调用方打印原始字节，也不要把乱码
+    当成 NID→IP 写进表里。
+    """
+    data_length = int.from_bytes(payload[6:8], "little")
+    end = CONTROL_HEADER_LENGTH + data_length
+    if end > len(payload):
+        raise ValueError(f"Data_Length({data_length}) 超出报文实际长度({len(payload)})")
+
+    pointer = CONTROL_HEADER_LENGTH
+    entries: list[list[tuple[int, str]]] = []
+    for id_len, byteorder in ((NID_LEN, "big"), (2, "little")):
+        if pointer >= end:
+            raise ValueError("负载在计数字段处提前结束")
+        count = payload[pointer]
+        pointer += 1
+        group: list[tuple[int, str]] = []
+        for _ in range(count):
+            if pointer + id_len + 4 > end:
+                raise ValueError("负载在条目中途结束，条目数与 Data_Length 不一致")
+            ident = int.from_bytes(payload[pointer : pointer + id_len], byteorder)
+            pointer += id_len
+            group.append((ident, le_bytes_to_ipv4(payload[pointer : pointer + 4])))
+            pointer += 4
+        entries.append(group)
+
+    if pointer != end:
+        raise ValueError(f"解析后剩余 {end - pointer} 字节未消耗，布局不匹配")
+    return entries[0], entries[1]
+
+
+def is_proxy_notify(payload: bytes) -> bool:
+    """判断是否为合法的新代理通知报文（Subtype=8 且校验和正确）。"""
+    if len(payload) < CONTROL_HEADER_LENGTH:
+        return False
+    if payload[0] != CONTROL_FIRST_BYTE or payload[5] != ControlSubtype.PROXY_NOTIFY:
+        return False
+    return calculate_checksum(payload) == 0
+
+
 def is_register_reply(payload: bytes) -> bool:
     """判断是否为合法的 RM 同步报文（Subtype=6 且校验和正确）。"""
     if len(payload) < CONTROL_HEADER_LENGTH:

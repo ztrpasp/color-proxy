@@ -8,7 +8,7 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass, field
 
-from .config import Config, ServiceConfig
+from .config import Config, L3ServiceConfig, ServiceConfig
 
 
 @dataclass
@@ -37,6 +37,16 @@ class ProviderState:
         self._pxs: dict[int, str] = {}                  # px -> ip
         self._web_services: dict[str, ServiceConfig] = {}  # sid -> 服务
         self._pending: dict[tuple[str, int], PendingTx] = {}  # (sid, cus_nid) -> 事务
+
+        # -- L3 隧道模式（v2）。两张表与 v1 的 _web_services 并列，模式分派靠
+        # "SID 落在哪张表里"判定，不靠 load[0]（docs/design-l3-v2.md §4.1，D13）。
+        self._l3_services: dict[str, L3ServiceConfig] = {}  # sid -> L3 服务
+        # peers 是**静态**表：由配置在此处一次性建立，数据面永不写入（D14，§7.3）。
+        # 故不需要放进 _lock 保护，建好即只读。
+        self._peer_tun_ip: dict[int, str] = {p.nid: p.tun_ip for p in config.l3.peers}
+        self._peer_nid_by_tun_ip: dict[str, int] = {
+            p.tun_ip: p.nid for p in config.l3.peers
+        }
 
     # -- 域内信息（注册回复填充） --------------------------------------
 
@@ -71,6 +81,52 @@ class ProviderState:
     def get_service(self, sid: str) -> ServiceConfig | None:
         with self._lock:
             return self._web_services.get(sid)
+
+    # -- 已发布 L3 服务（v2）--------------------------------------------------
+
+    def add_l3_service(self, sid: str, service: L3ServiceConfig) -> None:
+        with self._lock:
+            self._l3_services[sid] = service
+
+    def get_l3_service(self, sid: str) -> L3ServiceConfig | None:
+        """L3 模式的分派入口：SID 命中即走 L3 路径（D13）。"""
+        with self._lock:
+            return self._l3_services.get(sid)
+
+    def l3_service_count(self) -> int:
+        with self._lock:
+            return len(self._l3_services)
+
+    def find_l3_service_for_endpoint(
+        self, proto: str, ip: str, port: int
+    ) -> tuple[str, L3ServiceConfig] | None:
+        """按服务三元组反查 (sid, 服务)，含 §3.3 的通配回退。
+
+        回送方向用它由内层**源**三元组反推 SID（§7.2 回送第 2 步，D14）：先试精确
+        端口，再试同 IP 的通配项。返回 None 表示该源端点不是本机发布的服务。
+        """
+        with self._lock:
+            exact = [
+                (sid, svc) for sid, svc in self._l3_services.items()
+                if svc.proto == proto and svc.ip == ip and svc.port == port
+            ]
+            if exact:
+                return exact[0]
+            wildcard = [
+                (sid, svc) for sid, svc in self._l3_services.items()
+                if svc.proto == proto and svc.ip == ip and svc.is_wildcard_port
+            ]
+            return wildcard[0] if wildcard else None
+
+    # -- 已知消费端（静态，来自配置 l3.peers[]）-------------------------------
+
+    def peer_tun_ip(self, consumer_nid: int) -> str | None:
+        """消费端 NID → 其 tun 地址。入向来源校验用（§7.2 注入第 5 步）。"""
+        return self._peer_tun_ip.get(consumer_nid)
+
+    def peer_nid_by_tun_ip(self, tun_ip: str) -> int | None:
+        """tun 地址 → 消费端 NID。回送方向定位消费端用（§7.2 回送第 3 步）。"""
+        return self._peer_nid_by_tun_ip.get(tun_ip)
 
     # -- 未决事务 -------------------------------------------------------
 

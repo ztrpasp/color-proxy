@@ -14,7 +14,7 @@ import threading
 from dataclasses import dataclass, field
 
 from ..protocol.constants import NSID_LEN
-from ..protocol.sid import lsid_from_url
+from ..protocol.sid import lsid_from_service, lsid_from_url
 from .config import ConsumerConfig
 
 
@@ -86,6 +86,26 @@ class ConsumerState:
         lsid_hex = lsid_from_url(url).hex()
         with self._lock:
             return self._sid_table.get(lsid_hex)
+
+    def lookup_by_service(self, proto: str, ip: str, port: int) -> str | None:
+        """按 L3 规范服务串查完整 SID，含 §3.3 的两级回退。
+
+        回退顺序 ``(proto,ip,port)`` → ``(proto,ip,0)``：精确服务优先，命不中再试
+        该 IP 上的通配项（被动 FTP 的数据连接用临时端口，只能靠通配）。两级都不
+        命中返回 None，调用方丢包并计 ``sid_miss``（§7.1 上行第 6 步）。
+
+        SID 表只有 ``{L_sid, N_sid}``、没有明文服务地址，故消费端是**自己**按内层
+        包观察到的三元组拼串算哈希再查表（§3.5 的隐私特性）。
+        """
+        candidates = [port] if port == 0 else [port, 0]
+        # SHA1 在锁外算：哈希与共享状态无关，没必要占着锁
+        lsids = [lsid_from_service(proto, ip, candidate).hex() for candidate in candidates]
+        with self._lock:
+            for lsid_hex in lsids:
+                sid = self._sid_table.get(lsid_hex)
+                if sid is not None:
+                    return sid
+        return None
 
     def sid_count(self) -> int:
         with self._lock:

@@ -21,16 +21,26 @@ class Provider:
         self.state = ProviderState(config)
         self.sender = ColorSender()
         self.receiver = ColorReceiver(config.ipv4, self._on_payload)
+        # 常驻注册线程：每轮重注册后重发 ANN，使 RM 重启后自动恢复（§9.3 第 3 条）。
+        # publish_services 幂等（ANN 以 AM=1 覆盖同一条 SID），可安全重复调用。
+        self.keeper = registration.RegistrationKeeper(
+            self.state, self.sender,
+            on_registered=lambda: publish.publish_services(self.state, self.sender),
+        )
 
     def start(self) -> None:
-        """启动收包、向 RM 注册并发布服务。注册失败抛出异常。"""
+        """启动收包、向 RM 注册并发布服务。首次注册失败抛出异常。"""
         self.receiver.start()
-        if not registration.register(self.state, self.sender):
+        self.keeper.start()
+        if not self.keeper.wait_first():
             raise RuntimeError("无法向 RM 注册，服务端启动失败")
-        publish.publish_services(self.state, self.sender)
-        logger.info("服务端就绪，等待 GET 请求")
+        logger.info(
+            "服务端就绪：Web 服务 %d 条，L3 服务 %d 条",
+            len(self.state.config.services), self.state.l3_service_count(),
+        )
 
     def stop(self) -> None:
+        self.keeper.stop()
         self.receiver.stop()
 
     def _on_payload(self, payload: bytes) -> None:
