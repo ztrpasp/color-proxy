@@ -62,19 +62,19 @@ def build_sid_list_request(consumer_nid: int) -> ColorGet:
     return build_get(_SENTINEL_SID, consumer_nid, seg_id=None)
 
 
-def build_ack(
+def build_upstream(
     sid: str,
     consumer_nid: int,
     pids: list[int],
     seg_id: int,
-    http_request: bytes,
+    load: bytes,
 ) -> ColorData:
-    """构造携带 HTTP 请求的 B=1 ACK。
+    """构造一个上行 ``DATA(B=1)``。v1 的 HTTP 请求与 v2 的 L3 内层包共用它。
 
     - ``Destination_NID`` = 提供方 NID（取自 SID 的 N_sid）
     - ``Source_NID``      = 消费端 NID（B=1 线上的第二个 NID）
     - ``PID_List``        = 反向路径（域内为空）
-    - ``load``            = [HTTP_REQUEST|LAST] + 完整 HTTP 请求字节
+    - ``load``            = ``[类型位|LAST] + 内容``，由调用方拼好
     """
     nsid, lsid = split_sid_hex(sid)
     fields = {
@@ -87,8 +87,34 @@ def build_ack(
     }
     if pids:
         fields["PID_List"] = list(pids)
-    load = bytes([WebMsgType.HTTP_REQUEST | LoadFlag.LAST]) + http_request
     return ColorData(**fields) / Raw(load)
+
+
+def build_ack(
+    sid: str,
+    consumer_nid: int,
+    pids: list[int],
+    seg_id: int,
+    http_request: bytes,
+) -> ColorData:
+    """构造携带 HTTP 请求的 B=1 ACK（v1 内容级模式）。"""
+    load = bytes([WebMsgType.HTTP_REQUEST | LoadFlag.LAST]) + http_request
+    return build_upstream(sid, consumer_nid, pids, seg_id, load)
+
+
+def build_l3_upstream(
+    sid: str,
+    consumer_nid: int,
+    pids: list[int],
+    seg_id: int,
+    inner_packet: bytes,
+) -> ColorData:
+    """构造承载一个完整内层 IPv4 包的上行 DATA（v2 L3 模式，§4.3）。
+
+    一个 DATA 恰好承载一个内层包，不做聚合；``LAST`` 恒置 1（§4.2）。
+    """
+    load = bytes([WebMsgType.IP_UPSTREAM | LoadFlag.LAST]) + inner_packet
+    return build_upstream(sid, consumer_nid, pids, seg_id, load)
 
 
 def reverse_path_for_ack(recv_pids: list[int]) -> list[int]:
