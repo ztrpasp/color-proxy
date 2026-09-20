@@ -39,6 +39,7 @@ from colorproxy.tun import ipv4
 from colorproxy.tun.device_win import (
     WintunDevice,
     Wintun,
+    check_local_address,
     interface_state,
     warn_if_weak_host_disabled,
 )
@@ -147,30 +148,6 @@ def list_adapters() -> list[str]:
     if code != 0 or not output:
         return []
     return [item.strip() for item in output.split("|") if item.strip()]
-
-
-def check_local_address(ip: str) -> tuple[bool, str, str | None]:
-    """目标服务地址是否真的配在本机某个接口上、且处于可用状态。
-
-    这一条设计的 §11 M1b 没列，但在开发机上最容易先撞到：按 D9 发布的是提供端**物理
-    网卡地址**（172.10.0.2），若本机根本没有这个地址，内层包递上来后既不是本机地址、
-    也没有转发目标，会被直接丢弃——症状和弱主机模型丢弃一模一样，但病因完全不同。
-
-    也查 ``AddressState``：刚加上的地址若处于 Tentative/Duplicate（DAD 未通过），
-    存在但不可用，症状同样是静默丢包。
-
-    返回 ``(是否可用, 说明, 持有该地址的接口别名)``。
-    """
-    code, output = _powershell(
-        f"$a = Get-NetIPAddress -IPAddress '{ip}' -AddressFamily IPv4 -ErrorAction Stop"
-        " | Select-Object -First 1; ($a.InterfaceAlias, $a.AddressState) -join '|'"
-    )
-    if code != 0 or "|" not in output:
-        return False, f"{ip} 不在本机任何接口上", None
-    alias, address_state = (part.strip() for part in output.split("|", 1))
-    if address_state.lower() != "preferred":
-        return False, f"{ip} 在 {alias} 上但状态是 {address_state}（非 Preferred，不可用）", alias
-    return True, f"{ip} 配在 {alias}（{address_state}）", alias
 
 
 def half_open_connections(port: int) -> list[str]:

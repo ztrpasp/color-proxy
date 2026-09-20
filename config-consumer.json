@@ -29,7 +29,7 @@
     "tun_mask": "255.255.255.0",
     "tun_mtu": 1280,
     "mss_clamp": 1240,
-    "capture_routes": ["172.10.0.2/32"],
+    "capture_routes": ["172.10.9.2/32"],
     "tunnel_timeout_sec": 5.0,
     "firstpkt_queue_pkts": 4,
     "firstpkt_queue_bytes": 8192,

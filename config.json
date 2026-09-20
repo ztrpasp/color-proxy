@@ -28,7 +28,7 @@
   "l3": {
     "enabled": false,
     "tun_name": "color0",
-    "tun_ip": "10.99.1.254",
+    "tun_ip": "172.10.9.2",
     "tun_mask": "255.255.255.0",
     "tun_mtu": 1280,
     "mss_clamp": 1240,
@@ -43,11 +43,11 @@
       }
     ],
     "services": [
-      { "proto": "tcp", "ip": "172.10.0.2", "port": 8000, "desc": "HTTP 源站" },
-      { "proto": "tcp", "ip": "172.10.0.2", "port": 21, "desc": "FTP 控制" },
-      { "proto": "tcp", "ip": "172.10.0.2", "port": 0, "desc": "FTP 被动数据（通配，见设计 §8.3）" },
-      { "proto": "tcp", "ip": "172.10.0.2", "port": 3306, "desc": "MySQL" },
-      { "proto": "udp", "ip": "172.10.0.2", "port": 5004, "desc": "RTP 视频" }
+      { "proto": "tcp", "ip": "172.10.9.2", "port": 8000, "desc": "HTTP 源站" },
+      { "proto": "tcp", "ip": "172.10.9.2", "port": 21, "desc": "FTP 控制" },
+      { "proto": "tcp", "ip": "172.10.9.2", "port": 0, "desc": "FTP 被动数据（通配，见设计 §8.3）" },
+      { "proto": "tcp", "ip": "172.10.9.2", "port": 3306, "desc": "MySQL" },
+      { "proto": "udp", "ip": "172.10.9.2", "port": 5004, "desc": "RTP 视频" }
     ]
   }
 }

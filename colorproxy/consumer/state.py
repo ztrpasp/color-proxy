@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import ipaddress
 import queue
 import threading
 from dataclasses import dataclass, field
@@ -110,6 +111,40 @@ class ConsumerState:
     def sid_count(self) -> int:
         with self._lock:
             return len(self._sid_table)
+
+    # -- §2.4 路由隔离：外层目的地址不得落进 tun 路由覆盖范围 ------------------
+
+    def capture_route_conflicts(self) -> list[tuple[str, str]]:
+        """外层目的地址里有哪些落进了 ``capture_routes``。返回 ``[(说明, 地址), ...]``。
+
+        §2.4 的硬前提："路径一的任何外层目的地址，都不得落进路径二的 tun 路由覆盖
+        范围"。一旦命中，外层 CoLoR 包会被自己的路由表吞进 tun，**链路彻底死锁**，
+        而症状看着像"对端没回包"。
+
+        配置加载时只查得了 ``rm_ipv4``（那时还不知道域内代理与 BR 的地址）；本方法
+        查的是注册回复同步下来的 ``PeerProxys`` / ``PXs``，正是 §2.4 第 3 条要求的
+        "启动前用实际同步下来的表再核对一遍"。最典型的命中场景是消费端与提供端被
+        部署在**同一个 CoLoR 域**：此时上行 DATA 直接发往提供端代理的地址，而那个
+        地址恰好被 /32 主机路由指向了 tun。
+        """
+        routes = self.config.l3.capture_routes
+        if not routes:
+            return []
+        networks = [ipaddress.IPv4Network(route) for route in routes]
+        with self._lock:
+            candidates = [("本域 RM", self.rm_ipv4)]
+            candidates += [(f"域内代理 NID={nid:032x}", ip)
+                           for nid, ip in self._peer_proxys.items()]
+            candidates += [(f"边界路由器 PX={px}", ip) for px, ip in self._pxs.items()]
+        conflicts = []
+        for label, ip in candidates:
+            try:
+                address = ipaddress.IPv4Address(ip)
+            except ValueError:
+                continue
+            if any(address in network for network in networks):
+                conflicts.append((label, ip))
+        return conflicts
 
     # -- 未决请求 -------------------------------------------------------------
 

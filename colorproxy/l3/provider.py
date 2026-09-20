@@ -204,6 +204,13 @@ class L3Provider:
         if header.is_fragment:
             self.counters.bump("frag_drop")
             return False
+        if header.total_length > self.tun.mtu and header.dont_fragment:
+            # §6.3：超过 tun MTU 且 DF=1 的回程包。源站若探测 PMTU（QUIC 等）会自行
+            # 退避；ICMP 3/4 按 D16 降级为可选，这里只丢弃 + 计数。
+            self.counters.bump("mtu_drop")
+            logger.warning("回程内层包 %d 字节 > tun MTU %d 且 DF=1，丢弃（§6.3）",
+                           header.total_length, self.tun.mtu)
+            return False
 
         # 由内层**源**三元组反推 SID：这就是消费端当初拿来作目的的那个服务串（D14）
         source_endpoint = ipv4.endpoint(inner, header, source=True)

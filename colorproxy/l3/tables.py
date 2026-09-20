@@ -34,7 +34,12 @@ class L3Tunnel:
 
 @dataclass
 class ConsumerTunnel:
-    """消费端侧的一条隧道。"""
+    """消费端侧的一条隧道。
+
+    两个时间戳只服务于 §8.4 的下行静默重探（``tunnel_redetect_sec``，默认关闭）：
+    判据是"上行活跃但下行静默"，两边都要记。``tunnel_redetect_sec=0`` 时它们照常
+    更新但没人读——每包两次赋值，比加一个 if 还便宜。
+    """
 
     sid: str
     rev_pids: list[int]      # 发上行 DATA 用的反向路径
@@ -42,6 +47,8 @@ class ConsumerTunnel:
     next_hop_ip: str
     seg_id: int
     created_at: float = field(default_factory=time.monotonic)
+    last_upstream_at: float = field(default_factory=time.monotonic)
+    last_downstream_at: float = field(default_factory=time.monotonic)
 
 
 class L3TunnelTable:
@@ -146,19 +153,66 @@ class ConsumerTunnelTable:
             queued = self._queues.pop(sid, [])
         return tunnel, queued
 
-    def expire_handshakes(self, now: float | None = None) -> list[tuple[str, int]]:
-        """回收超时的握手，返回 ``[(sid, 丢弃的首包数), ...]``。
+    def mark_upstream(self, sid: str, now: float | None = None) -> None:
+        """记一次上行发送时刻（§8.4 重探判据的"上行活跃"一侧）。"""
+        moment = now if now is not None else time.monotonic()
+        with self._lock:
+            tunnel = self._tunnels.get(sid)
+            if tunnel is not None:
+                tunnel.last_upstream_at = moment
 
-        超时后把 SID 退回"未建立"：下一个包会重新触发 GET（§5.2）。
+    def mark_downstream(self, sid: str, now: float | None = None) -> None:
+        """记一次下行到达时刻（§8.4 重探判据的"下行静默"一侧）。"""
+        moment = now if now is not None else time.monotonic()
+        with self._lock:
+            tunnel = self._tunnels.get(sid)
+            if tunnel is not None:
+                tunnel.last_downstream_at = moment
+
+    def silent_tunnels(self, silence_sec: float, now: float | None = None) -> list[str]:
+        """列出"上行活跃、下行静默超过 ``silence_sec``"的 SID（§8.4）。
+
+        只在上行确实活跃时才报：整条隧道都没流量时下行当然是静默的，那是空闲不是
+        故障，重探它纯属给 RM/BR 添负担。已在重探中的 SID 不重复报。
         """
         moment = now if now is not None else time.monotonic()
-        expired: list[tuple[str, int]] = []
+        with self._lock:
+            return [
+                sid for sid, tunnel in self._tunnels.items()
+                if sid not in self._pending_since
+                and moment - tunnel.last_upstream_at < silence_sec
+                and moment - tunnel.last_downstream_at > silence_sec
+            ]
+
+    def begin_redetect(self, sid: str, now: float | None = None) -> bool:
+        """把一条**已建立**的隧道置为"重探中"，返回 True 表示本次应当发 GET。
+
+        与 ``begin_handshake`` 的区别：**保留旧隧道**。上行在重探期间继续走旧路径，
+        新的隧道 DATA 到达时 ``establish()`` 原子替换（§8.4 的"新旧 PID 路径原子
+        替换"）。在途的旧路径下行包照常被接收——下行不校验 PID，故不需要额外的宽限
+        窗口。重探超时由 ``expire_handshakes`` 一并回收，旧隧道不受影响。
+        """
+        with self._lock:
+            if sid not in self._tunnels or sid in self._pending_since:
+                return False
+            self._pending_since[sid] = now if now is not None else time.monotonic()
+            return True
+
+    def expire_handshakes(self, now: float | None = None) -> list[tuple[str, int, bool]]:
+        """回收超时的握手，返回 ``[(sid, 丢弃的首包数, 是否重探), ...]``。
+
+        超时后把 SID 退回"未建立"：下一个包会重新触发 GET（§5.2）。第三项区分两种
+        超时：普通握手超时**没有**隧道可用（首包白等一场），重探超时则旧隧道仍在、
+        一个包都没丢——两者要打不同的日志，混为一谈会让人以为隧道断了。
+        """
+        moment = now if now is not None else time.monotonic()
+        expired: list[tuple[str, int, bool]] = []
         with self._lock:
             for sid, since in list(self._pending_since.items()):
                 if moment - since < self._handshake_timeout:
                     continue
                 del self._pending_since[sid]
-                expired.append((sid, len(self._queues.pop(sid, []))))
+                expired.append((sid, len(self._queues.pop(sid, [])), sid in self._tunnels))
         return expired
 
     def count(self) -> int:

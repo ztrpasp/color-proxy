@@ -1,14 +1,21 @@
-"""消费端装配：收包分发 + 注册 + 拉取 SID 表 + 起 HTTP 正向代理。"""
+"""消费端装配：收包分发 + 注册 + 拉取 SID 表 + HTTP 正向代理 + L3 隧道运行期。
+
+v1 的 HTTP 正向代理（:8910）与 v2 的 L3 隧道在同一进程内并存、互不干扰：前者的入口
+是浏览器的代理设置，后者的入口是 tun 设备 + 主机路由。收到 ``DATA(B=0)`` 时**按 SID
+落在哪张表里分派**（docs/design-l3-v2.md §4.1，D13）。
+"""
 from __future__ import annotations
 
 import logging
 import time
 
 from .. import registration
+from ..l3.service import ConsumerL3Service
 from ..protocol.constants import CONTROL_FIRST_BYTE, DATA_FIRST_BYTE
 from ..protocol.sid import sid_hex_from_url
 from ..transport.receiver import ColorReceiver
 from ..transport.sender import ColorSender
+from ..tun.device import TunDevice
 from . import handlers, sid_table
 from .config import ConsumerConfig
 from .proxy import ProxyServer
@@ -23,12 +30,17 @@ SID_LIST_COLLECT_WINDOW = 1.5
 class Consumer:
     """共生网络 Web 代理消费端（浏览器侧正向代理）。"""
 
-    def __init__(self, config: ConsumerConfig) -> None:
+    def __init__(self, config: ConsumerConfig, tun: TunDevice | None = None) -> None:
         self.config = config
         self.state = ConsumerState(config)
         self.sender = ColorSender()
         self.receiver = ColorReceiver(config.ipv4, self._on_payload)
         self.proxy: ProxyServer | None = None
+        # L3 未启用时根本不构造。``tun`` 供离线测试注入 LoopbackTun。
+        self.l3: ConsumerL3Service | None = (
+            ConsumerL3Service(self.state, self.sender, tun=tun)
+            if config.l3.enabled else None
+        )
         # 常驻注册线程（§9.3 第 3 条）。消费端不发布服务，故无 on_registered 回调；
         # 周期性重注册的收益在于 RM 重启后能重新拿到域内代理表。
         self.keeper = registration.RegistrationKeeper(self.state, self.sender)
@@ -43,6 +55,14 @@ class Consumer:
         sid_table.request_sid_list(self.state, self.sender)
         time.sleep(SID_LIST_COLLECT_WINDOW)
         logger.info("本域 SID 表已就绪：%d 条", self.state.sid_count())
+        # tun 在 SID 表就绪后才起：路由一加上，客户端的包立刻就会进来，而 SID 表
+        # 还没到的话每个包都会被计成 sid_miss 并丢掉（症状是"刚启动那几秒不通"）。
+        if self.l3 is not None:
+            self._assert_route_isolation()
+            self.l3.start()
+            logger.info("L3 隧道就绪：%s(%s)，捕获路由 %s",
+                        self.config.l3.tun_name, self.config.l3.tun_ip,
+                        list(self.config.l3.capture_routes))
         self.proxy = ProxyServer(self.config.proxy_port, self.state, self.sender)
         logger.info("HTTP 正向代理就绪，监听端口 %d", self.config.proxy_port)
 
@@ -57,6 +77,26 @@ class Consumer:
             self.proxy.server_close()
         self.keeper.stop()
         self.receiver.stop()
+        if self.l3 is not None:
+            self.l3.stop()
+
+    def _assert_route_isolation(self) -> None:
+        """起 tun 之前用**实际同步下来的**域内表再核对一遍 §2.4，命中则拒绝启动。
+
+        配置加载时只能查 ``rm_ipv4``；域内代理与 BR 的地址要到注册回复之后才知道。
+        这道检查必须在加路由**之前**做：路由一旦加上去，外层包就已经开始被吞进 tun 了。
+        """
+        conflicts = self.state.capture_route_conflicts()
+        if not conflicts:
+            return
+        detail = "；".join(f"{label} {ip}" for label, ip in conflicts)
+        raise RuntimeError(
+            f"拒绝启动 L3：以下外层目的地址落进了 l3.capture_routes "
+            f"{list(self.config.l3.capture_routes)} —— {detail}。"
+            "外层 CoLoR 包会被自己的路由表吞进 tun，链路彻底死锁（设计 §2.4）。"
+            "命中域内代理通常意味着消费端与提供端在同一个 CoLoR 域，"
+            "此时必须改用 §2.5 的虚服务地址方案（服务地址取提供端 color0 自己的地址）"
+        )
 
     def _preload_static_sids(self) -> None:
         """把配置里的静态 SID 预载入本域 SID 表（联调用，见 config.sids）。"""
@@ -77,8 +117,11 @@ class Consumer:
             elif not self.state.registered.is_set():
                 return  # 注册完成前忽略业务报文
             elif first_byte == DATA_FIRST_BYTE:
-                # 隧道/响应 DATA 与 RM 回送的 SID 列表条目，细分见 handlers
-                handlers.handle_data(self.state, payload)
+                # 先试 L3：SID 不在 L3 隧道/待建表里时返回 False，再回落 v1（D13）。
+                # 隧道/响应 DATA 与 RM 回送的 SID 列表条目的细分见 handlers。
+                if self.l3 is None or self.l3.dataplane is None \
+                        or not self.l3.dataplane.handle_data(payload):
+                    handlers.handle_data(self.state, payload)
             # 0x71 ANN / 0x72 GET 是提供端职责，消费端忽略
         except Exception:  # noqa: BLE001 单个坏包不应拖垮收包线程
             logger.exception("处理报文时发生异常（已忽略该包）")

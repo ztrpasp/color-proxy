@@ -377,6 +377,40 @@ def interface_state(interface: str) -> dict[str, object | None]:
     }
 
 
+def check_local_address(ip: str) -> tuple[bool, str, str | None]:
+    """某个地址是否真的配在本机某个接口上、且处于可用状态。
+
+    这一条设计的 §11 M1b 没列，但在开发机上最容易先撞到：按 D9 发布的是提供端**物理
+    网卡地址**，若本机根本没有这个地址，内层包递上来后既不是本机地址、也没有转发
+    目标，会被直接丢弃——症状和弱主机模型丢弃一模一样，但病因完全不同。
+
+    也查 ``AddressState``：刚加上的地址若处于 Tentative/Duplicate（DAD 未通过），
+    存在但不可用，症状同样是静默丢包。
+
+    返回 ``(是否可用, 说明, 持有该地址的接口别名)``。持有者别名也是
+    ``warn_if_weak_host_disabled`` 要检查的"服务地址所在的那张网卡"。
+    """
+    quoted = ip.replace("'", "''")
+    script = (
+        f"$a = Get-NetIPAddress -IPAddress '{quoted}' -AddressFamily IPv4 -ErrorAction Stop"
+        " | Select-Object -First 1; ($a.InterfaceAlias, $a.AddressState) -join '|'"
+    )
+    try:
+        result = subprocess.run(
+            ("powershell", "-NoProfile", "-NonInteractive", "-Command", script),
+            capture_output=True, text=True, encoding="mbcs", errors="replace",
+        )
+    except OSError as exc:
+        return False, f"无法执行 PowerShell 查询 {ip}：{exc}", None
+    output = (result.stdout or result.stderr).strip()
+    if result.returncode != 0 or "|" not in output:
+        return False, f"{ip} 不在本机任何接口上", None
+    alias, address_state = (part.strip() for part in output.split("|", 1))
+    if address_state.lower() != "preferred":
+        return False, f"{ip} 在 {alias} 上但状态是 {address_state}（非 Preferred，不可用）", alias
+    return True, f"{ip} 配在 {alias}（{address_state}）", alias
+
+
 def warn_if_weak_host_disabled(interface: str, service_interface: str | None = None) -> bool:
     """启动自检：相关接口的两个开关都确认开启返回 True，否则打印告警与命令（§2.3，D9）。
 

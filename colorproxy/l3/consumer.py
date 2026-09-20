@@ -17,6 +17,7 @@ from ..consumer.state import ConsumerState
 from ..protocol.constants import WEB_MSG_TYPE_MASK, WebMsgType
 from ..protocol.packets import ColorData
 from ..protocol.sid import sid_hex_from_packet
+from ..protocol.utils import verify_checksum
 from ..transport.sender import ColorSender
 from ..tun import ipv4, mss
 from ..tun.device import TunDevice
@@ -83,6 +84,7 @@ class L3Consumer:
         tunnel = self.tunnels.get(sid)
         if tunnel is not None:
             self._send_upstream(sid, tunnel.rev_pids, tunnel.seg_id, tunnel.next_hop_ip, payload)
+            self.tunnels.mark_upstream(sid)
             return True
         return self._queue_and_handshake(sid, payload, endpoint)
 
@@ -108,6 +110,15 @@ class L3Consumer:
             self.counters.bump("proto_drop")
             return None
 
+        if header.total_length > self.config.tun_mtu and header.dont_fragment:
+            # §6.3：超过 tun MTU 且 DF=1。D3 拓扑下近乎不触发（内核在写进 color0 之前
+            # 就已按接口 MTU 处理完了），真出现说明开了 IP 转发在替别的主机转发流量。
+            # ICMP 3/4 按 D16 降级为可选，此处只丢弃 + 计数，不构造 ICMP。
+            self.counters.bump("mtu_drop")
+            logger.warning("内层包 %d 字节 > tun MTU %d 且 DF=1，丢弃（§6.3）",
+                           header.total_length, self.config.tun_mtu)
+            return None
+
         return ipv4.endpoint(inner, header, source=False)
 
     def _lookup_sid(self, endpoint: tuple[str, str, int]) -> str | None:
@@ -129,13 +140,45 @@ class L3Consumer:
             self.counters.bump("firstpkt_dropped", dropped)
 
         if self.tunnels.begin_handshake(sid):
-            with self._seg_lock:
-                seg_id = next(self._seg_ids)
-            self.sender.send(self.state.rm_ipv4, build_get(sid, self.state.nid, seg_id))
-            self.counters.bump("colr_tx")
+            seg_id = self._send_get(sid)
             logger.info("L3 隧道未建立，已发 GET：服务=%s SID=%s… SegID=%d",
                         endpoint, sid[:16], seg_id)
         return True
+
+    def _send_get(self, sid: str) -> int:
+        """向本域 RM 发一个 GET（握手与重探共用），返回本次用的 SegID。"""
+        with self._seg_lock:
+            seg_id = next(self._seg_ids)
+        self.sender.send(self.state.rm_ipv4, build_get(sid, self.state.nid, seg_id))
+        self.counters.bump("colr_tx")
+        return seg_id
+
+    # ------------------------------------------------- 下行总入口（§1.3 / §7.1）
+
+    def handle_data(self, payload: bytes) -> bool:
+        """收到 ``DATA(B=0)`` 的 L3 总入口。返回 False 表示应交回 v1 路径。
+
+        分派严格按 §1.3 的两级判据：
+
+        1. **跨模式**看 SID 落在哪张表里（D13）——SID 既不在 L3 隧道表也不在待建表，
+           就不是 L3 的包，原样交回 v1；
+        2. **L3 内部**才看 ``load[0]``：``0x10`` 是隧道 DATA、其余按下行内层包处理。
+           这一层不违背 D13：SID 已经唯一确定了模式，``load[0]`` 只在两张都属于本
+           模式的路径之间选一条，选错的后果是计一次 ``nonipv4_drop``，不会串到 v1。
+        """
+        if len(payload) <= 9 or not verify_checksum(payload[:payload[6]]):
+            return False  # 坏包：交回 v1 路径，它会在同一处校验后静默丢弃
+        data = ColorData(payload)
+        if data.Flags.B or data.Flags.r:
+            return False  # B=1 是本端发出的 ACK；r=1 是 RM 的服务摘要应答
+        sid = sid_hex_from_packet(bytes(data.NSID), bytes(data.LSID))
+        if self.tunnels.get(sid) is None and not self.tunnels.is_pending(sid):
+            return False
+
+        load = bytes(data.payload)
+        if load and load[0] & WEB_MSG_TYPE_MASK == WebMsgType.TUNNEL:
+            return self._on_tunnel(data, sid)
+        return self._on_downstream(data, sid, load)
 
     # --------------------------------------------------- 隧道 DATA（§5 ②）
 
@@ -148,6 +191,15 @@ class L3Consumer:
         sid = sid_hex_from_packet(bytes(data.NSID), bytes(data.LSID))
         if not self.tunnels.is_pending(sid):
             return False
+        return self._on_tunnel(data, sid)
+
+    def _on_tunnel(self, data: ColorData, sid: str) -> bool:
+        if not self.tunnels.is_pending(sid):
+            # 隧道已建好后又收到一份隧道 DATA：提供端对重发的 GET 是幂等回应的，
+            # 这属于正常重复，不是错误，照常忽略即可。
+            logger.debug("隧道 DATA 重复到达（隧道已建立），忽略：SID=%s…", sid[:16])
+            return True
+        self.counters.bump("colr_rx")
 
         recv_pids = list(data.PID_List)
         if data.Flags.R:
@@ -160,15 +212,19 @@ class L3Consumer:
             return True
 
         seg_id = int(data.Segment_ID) if data.Flags.S else 0
+        was_up = self.tunnels.get(sid) is not None  # 重探：旧隧道原子换成新的（§8.4）
         tunnel, queued = self.tunnels.establish(
             sid, reverse_path_for_ack(recv_pids),
             int.from_bytes(bytes(data.NSID), "big"), next_hop, seg_id,
         )
-        self.counters.bump("tunnel_up")
-        logger.info("L3 隧道已建立：SID=%s… 下一跳=%s，冲刷首包 %d 个",
-                    sid[:16], next_hop, len(queued))
+        if not was_up:
+            self.counters.bump("tunnel_up")
+        logger.info("L3 隧道%s：SID=%s… 下一跳=%s，冲刷首包 %d 个",
+                    "已刷新（重探成功）" if was_up else "已建立", sid[:16], next_hop, len(queued))
         for packet in queued:
             self._send_upstream(sid, tunnel.rev_pids, tunnel.seg_id, tunnel.next_hop_ip, packet)
+        if queued:
+            self.tunnels.mark_upstream(sid)
         return True
 
     # ------------------------------------------------------------ 下行（§7.1）
@@ -182,9 +238,12 @@ class L3Consumer:
         sid = sid_hex_from_packet(bytes(data.NSID), bytes(data.LSID))
         if self.tunnels.get(sid) is None:
             return False
-        self.counters.bump("colr_rx")
+        return self._on_downstream(data, sid, bytes(data.payload))
 
-        load = bytes(data.payload)
+    def _on_downstream(self, data: ColorData, sid: str, load: bytes) -> bool:
+        self.counters.bump("colr_rx")
+        self.tunnels.mark_downstream(sid)
+
         if not load:
             return True
         if load[0] & WEB_MSG_TYPE_MASK != WebMsgType.IP_DOWNSTREAM:
@@ -213,15 +272,41 @@ class L3Consumer:
     def expire_handshakes(self) -> None:
         """回收超时的握手并丢弃其首包队列（§5.2）。
 
-        不实现这一条的话，握手失败后首包会永久滞留在队列里。
+        不实现这一条的话，握手失败后首包会永久滞留在队列里。由
+        ``l3/service.py`` 的 ticker 周期调用——不是给调用方选做的。
         """
-        for sid, dropped in self.tunnels.expire_handshakes():
+        for sid, dropped, was_redetect in self.tunnels.expire_handshakes():
             if dropped:
                 self.counters.bump("firstpkt_dropped", dropped)
+            if was_redetect:
+                logger.warning(
+                    "L3 隧道重探超时(%.1fs)：SID=%s… 提供端没回隧道 DATA，"
+                    "继续用旧路径（§8.4）", self.config.tunnel_timeout_sec, sid[:16],
+                )
+                continue
             logger.warning(
                 "L3 隧道握手超时(%.1fs)：SID=%s… 丢弃首包 %d 个，该 SID 退回未建立状态，"
                 "下一个包会重新发 GET",
                 self.config.tunnel_timeout_sec, sid[:16], dropped,
+            )
+
+    def redetect_silent_tunnels(self) -> None:
+        """上行活跃但下行静默超过 ``tunnel_redetect_sec`` 的隧道，重发 GET（§8.4）。
+
+        D1 不做刷新与回收，代价是"提供端重启、BR 侧 PID 表老化都会让隧道静默失效，
+        且没有任何恢复路径"。本兜底默认关闭（``tunnel_redetect_sec=0``），联调不顺
+        时打开。重探期间**旧隧道继续可用**，新的隧道 DATA 到达时原子替换。
+        """
+        silence = self.config.tunnel_redetect_sec
+        if silence <= 0:
+            return
+        for sid in self.tunnels.silent_tunnels(silence):
+            if not self.tunnels.begin_redetect(sid):
+                continue
+            self._send_get(sid)
+            logger.warning(
+                "L3 隧道下行静默 %.1fs（上行仍活跃），重发 GET 探测：SID=%s…（§8.4）",
+                silence, sid[:16],
             )
 
     def _send_upstream(
