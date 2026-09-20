@@ -81,6 +81,11 @@ from colorproxy.state import ProviderState
 from colorproxy.tun import ipv4
 from colorproxy.tun.device import LoopbackTun
 
+# 与本脚本同在 tools/ 下。M1b 已经把"SYN 到底进没进协议栈"这个判据做对了
+# （SynReceived 存在 = 进了、只是回不来），没必要重写一遍。
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from l3_m1b_inject import check_listener, enable_weak_host, half_open_connections  # noqa: E402
+
 # 控制台编码兜底：中文 Windows 控制台默认 GBK，打印非 ASCII 标记会抛 UnicodeEncodeError
 # 把整个脚本带崩（输出被重定向到管道时尤其容易撞上）。诊断脚本不该因为一个字符死掉。
 for _stream in (sys.stdout, sys.stderr):
@@ -131,6 +136,60 @@ def allow_firewall(alias: str) -> None:
         f"New-NetFirewallRule -DisplayName '{FIREWALL_RULE}' -Direction Inbound "
         f"-InterfaceAlias '{alias}' -Action Allow -ErrorAction SilentlyContinue | Out-Null"
     )
+
+
+def describe_interface(alias: str) -> None:
+    """打印 tun 的实况：地址、AddressState、MTU、两个弱主机开关。
+
+    配置没生效时症状与丢包完全一样，所以在跑流量之前先把实况摊开。尤其是
+    ``AddressState``：刚加的地址若停在 Tentative，存在但不可用。
+    """
+    code, output = _powershell(
+        f"$a = Get-NetIPAddress -InterfaceAlias '{alias}' -AddressFamily IPv4 -ErrorAction "
+        "SilentlyContinue | Select-Object -First 1; "
+        f"$i = Get-NetIPInterface -InterfaceAlias '{alias}' -AddressFamily IPv4 -ErrorAction "
+        "SilentlyContinue | Select-Object -First 1; "
+        "($a.IPAddress, $a.PrefixLength, $a.AddressState, $i.NlMtu, "
+        "$i.WeakHostSend, $i.WeakHostReceive) -join '|'"
+    )
+    if code != 0 or "|" not in output:
+        print(f"  [诊断] 拿不到 {alias} 的接口实况：{output.splitlines()[:1]}")
+        return
+    ip, prefix, state, mtu, send, receive = (x.strip() for x in output.split("|"))
+    print(f"  [诊断] {alias}: {ip}/{prefix} {state} MTU={mtu} "
+          f"weakhostsend={send} weakhostreceive={receive}")
+    if state.lower() != "preferred":
+        print(f"  [诊断] 注意：地址状态是 {state} 而非 Preferred —— 存在但不可用，会静默丢包")
+
+
+def find_net_route(remote_ip: str, expect_alias: str, expect_source: str) -> bool:
+    """内核**实际**会用哪个接口、哪个源地址去到 ``remote_ip``（决定性判据）。
+
+    ``Find-NetRoute`` 一次回答两件事，正好对上 L3 最常见的两类故障：
+    选错接口（包根本不进 tun）与选错源地址（提供端逐包按 ``peers[]`` 校验内层源，
+    不符就是 ``src_bind_drop``，每个包都过不去，§7.3/D14）。
+    """
+    code, output = _powershell(
+        f"$r = Find-NetRoute -RemoteIPAddress '{remote_ip}' -ErrorAction Stop | "
+        "Select-Object -First 1; "
+        "($r.InterfaceAlias, $r.IPAddress) -join '|'"
+    )
+    if code != 0 or "|" not in output:
+        print(f"  [诊断] Find-NetRoute {remote_ip} 失败：{output.splitlines()[:1]}")
+        return False
+    alias, source = (x.strip() for x in output.split("|", 1))
+    ok = alias == expect_alias and source == expect_source
+    mark = "[PASS]" if ok else "[FAIL]"
+    print(f"  {mark} 内核去 {remote_ip} 会走 {alias}、源地址 {source}"
+          f"（期望 {expect_alias} / {expect_source}）")
+    if not ok:
+        if alias != expect_alias:
+            print("  [诊断] 选错了接口：包根本不会进 tun。检查捕获路由是否加上、"
+                  "有没有别的路由以更优的度量覆盖了这个地址")
+        if source != expect_source:
+            print("  [诊断] 选错了源地址：提供端会逐包 src_bind_drop（§7.3，D14）。"
+                  "这也解释了 MSS 不是按 tun MTU 算的")
+    return ok
 
 
 def remove_firewall_rule() -> None:
@@ -420,16 +479,43 @@ def run_provider_half(provider_config, consumer_config, udp_port: int,
     recv_c = UdpColorReceiver(udp_port + 1, lambda p: _feed_consumer(consumer, p), "UdpRecv(C)")
 
     ok = False
+    warnings = WarningCollector().install()
     try:
         provider.start()
         allow_firewall(provider_config.l3.tun_name)
+        # 只在本脚本自己创建、退出即删的 tun 上代劳开弱主机开关（理由同 M1b 的
+        # enable_weak_host）。**2026-09-21 真机修正**：设计 §2.3 说 §2.5 下「四个开关
+        # 一个都不需要」，但它自己的对照表第一行（唯一成功的那次）里 color0 的两个
+        # 开关是**开着**的 —— §2.5 省掉的是服务网卡那两个，不是全部四个。不开时的
+        # 症状正是「包写进 tun 了，协议栈连 RST 都不回」。
+        enable_weak_host(provider_config.l3.tun_name)
         consumer.start()
         recv_p.start()
         recv_c.start()
 
+        print("  --- 预检 ---")
+        describe_interface(provider_config.l3.tun_name)
+        listening, detail = check_listener(service.port)
+        print(f"  {'[PASS]' if listening else '[FAIL]'} 源站监听：{detail}")
+        # 回程判据：源站回给消费端 tun 地址的包，内核必须选 color0 发出去
+        find_net_route(consumer_tun_ip, provider_config.l3.tun_name, service.ip)
+        print("  --- 预检完 ---")
+
         client = MiniTcp(consumer.tun, consumer_tun_ip, service.ip, 51001, service.port)
         print("  用户态客户端发起一次 HTTP 请求（经真 tun 注入真源站）…")
         body = client.client_request(b"GET / HTTP/1.0\r\nHost: m1c\r\n\r\n")
+
+        if not body and provider.counters.get("tun_tx") > 0:
+            # M1b 的决定性判据：包写进 tun 了却没回应，到底是「没进协议栈」还是
+            # 「进了但回不来」。这两者的现场表现一模一样，靠猜要耗很久。
+            half_open = half_open_connections(service.port)
+            if half_open:
+                print(f"  [诊断] 协议栈里有半开连接 {half_open} —— SYN **进了**协议栈，"
+                      "问题只在回程：看上面 Find-NetRoute 那行选的接口对不对")
+            else:
+                print("  [诊断] 协议栈里没有任何半开连接 —— SYN **根本没被协议栈接受**。"
+                      "按可能性排序：弱主机开关（看上面 describe_interface 那行）、"
+                      "防火墙把 tun 归成了公用网络、服务地址不在本机")
 
         clamp = provider_config.l3.mss_clamp
         rewrote = provider.counters.get("mss_clamped") > 0
@@ -444,8 +530,9 @@ def run_provider_half(provider_config, consumer_config, udp_port: int,
              f"MSS={client.peer_mss}；提供端 clamp "
              f"{'改写过' if rewrote else '未触发（内核已按 MTU 填对，正常）'}"),
             ("HTTP 响应体正确", ok, repr(body[:60]) if body else "没拿到响应"),
-        ])
+        ], warnings)
     finally:
+        warnings.remove()
         recv_c.stop(); recv_p.stop()
         consumer.stop(); provider.stop()
         origin.shutdown(); origin.server_close()
@@ -497,12 +584,21 @@ def run_consumer_half(provider_config, consumer_config, udp_port: int,
             sock.close()
 
     ok = False
+    warnings = WarningCollector().install()
     try:
         consumer.start()
         allow_firewall(consumer_config.l3.tun_name)
+        enable_weak_host(consumer_config.l3.tun_name)  # 同半 P，只作用于本脚本创建的 tun
         provider.start()
         recv_p.start()
         recv_c.start()
+
+        print("  --- 预检 ---")
+        describe_interface(consumer_config.l3.tun_name)
+        # 决定性判据：内核去服务地址必须走 color0、且源地址必须是本端 tun 地址。
+        # 源地址不对的话提供端会逐包 src_bind_drop，一个包都过不去（§7.3，D14）。
+        find_net_route(service.ip, consumer_config.l3.tun_name, consumer_config.l3.tun_ip)
+        print("  --- 预检完 ---")
 
         print("  真客户端 connect() 中（内核按 capture_routes 把包送进 tun）…")
         client_thread = threading.Thread(target=_client, daemon=True, name="RealClient")
@@ -524,8 +620,9 @@ def run_consumer_half(provider_config, consumer_config, udp_port: int,
             ("客户端 connect() 完成", bool(result.get("connected")),
              str(result.get("error", ""))),
             ("客户端收到响应体", ok, repr(body[:60]) if body else "没收到"),
-        ])
+        ], warnings)
     finally:
+        warnings.remove()
         recv_c.stop(); recv_p.stop()
         provider.stop(); consumer.stop()
         to_provider.close(); to_consumer.close()
@@ -621,13 +718,46 @@ def _feed_consumer(service: ConsumerL3Service, payload: bytes) -> None:
         dataplane.handle_data(payload)
 
 
+class WarningCollector(logging.Handler):
+    """收集数据面的 WARNING，供报告回显。
+
+    失败时最有信息量的恰恰是这些行（``src_bind_drop`` 那条直接写了期望与实测的
+    内层源地址），而它们容易被 tun 上的噪声日志冲掉或在重定向时被截断。报告自带
+    它们，一次运行就能定位，不必让人回去翻滚屏。
+    """
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.WARNING)
+        self.messages: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            text = record.getMessage()
+        except Exception:  # noqa: BLE001
+            return
+        if text not in self.messages:      # 同一条重复几十次没有增量信息
+            self.messages.append(text)
+
+    def install(self) -> "WarningCollector":
+        logging.getLogger("colorproxy.l3").addHandler(self)
+        return self
+
+    def remove(self) -> None:
+        logging.getLogger("colorproxy.l3").removeHandler(self)
+
+
 def _report_half(ok: bool, provider: ProviderL3Service, consumer: ConsumerL3Service,
-                 checks: list[tuple[str, bool, str]]) -> None:
+                 checks: list[tuple[str, bool, str]],
+                 warnings: "WarningCollector | None" = None) -> None:
     print()
     for label, passed, detail in checks:
         print(f"  {'[PASS]' if passed else '[FAIL]'} {label}" + (f"（{detail}）" if detail else ""))
     print(f"  提供端计数器：{provider.counters.format_line()}")
     print(f"  消费端计数器：{consumer.counters.format_line()}")
+    if not ok and warnings is not None and warnings.messages:
+        print("  数据面告警（去重后前 6 条，失败原因多半就在里面）：")
+        for text in warnings.messages[:6]:
+            print(f"    · {text}")
     print(f"  {'[PASS] 本半通过' if ok else '[FAIL] 本半未通过'}")
 
 

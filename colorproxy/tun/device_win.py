@@ -437,12 +437,20 @@ def warn_if_weak_host_disabled(interface: str, service_interface: str | None = N
         f'  netsh interface ipv4 set interface "{alias}" {switch}=enabled'
         for alias, missing in incomplete for switch in missing
     )
+    # 两种方案的理由不同，说错了会把人引向错误的排查方向
+    reason = (
+        "内层包目的是物理网卡地址却从 tun 递上来、回程源地址属于物理网卡却要从 tun 发出，"
+        "两个方向都违反 Windows 默认的强主机模型。注意**两张网卡都要开**：tun 与服务"
+        "地址所在的那张（§2.3，D9）"
+        if service_interface else
+        "服务地址就绑在 tun 自己身上（§2.5，D18），理论上强主机模型已满足；但 M1b 唯一"
+        "成功的那组实验里 tun 的这两个开关是开着的，尚未隔离出它们是否必需。开着是已知"
+        "可行的配置"
+    )
     logger.warning(
-        "弱主机模型开关未确认开启：%s。内层包目的是物理网卡地址却从 tun 递上来、回程源"
-        "地址属于物理网卡却要从 tun 发出，两个方向都违反 Windows 默认的强主机模型，包会"
-        "被静默丢弃（症状与防火墙拦截、源站只听 127.0.0.1 一模一样，极难区分）。"
-        "注意**两张网卡都要开**：tun 与服务地址所在的那张（§2.3）。请以管理员执行：\n%s",
+        "弱主机模型开关未确认开启：%s。%s。不开时包会被静默丢弃（症状与防火墙拦截、"
+        "源站只听 127.0.0.1 一模一样，极难区分）。请以管理员执行：\n%s",
         "；".join(f"{alias} 缺 {'/'.join(missing)}" for alias, missing in incomplete),
-        commands,
+        reason, commands,
     )
     return False

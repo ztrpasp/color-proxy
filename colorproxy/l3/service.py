@@ -221,11 +221,18 @@ class ProviderL3Service(_L3ServiceBase):
         return [_CounterLog(self.counters, "L3/提供端")]
 
     def _check_host_model(self) -> None:
-        """§2.3 / §2.5：服务地址不在 tun 自己身上时，才需要那四个弱主机开关。
+        """§2.3 / §2.5：检查弱主机模型开关。**两种方案要检查的网卡数量不同。**
 
-        §2.5 的虚服务地址方案把服务绑在 color0 自己的地址上，内层包目的正是收包网卡
-        自己的地址，强主机模型天然满足，**一个开关都不需要**（§2.3 对照实验第一行已
-        实测确认）。只有 D9 的物理地址方案才要检查，且**两张网卡都要查**。
+        2026-09-21 真机修正：§2.3 那句"§2.5 下四个开关一个都不需要"是过度概括，与它
+        自己的对照表矛盾——表里第一行（目标是 color0 自己的地址、拿到 SYN-ACK 的那次）
+        的「color0 两开关」列是**开**，「服务网卡两开关」列才是「—」。所以：
+
+        - **§2.5（D18）省掉的是服务网卡那两个**，color0 自己的两个仍按已知可行的配置
+          检查；
+        - D9 则两张网卡四个都要查。
+
+        不开时的症状是"包写进 tun 了、抓包看得见，协议栈连 RST 都不回"，与防火墙拦截、
+        源站只听回环完全一样，极难区分——所以宁可多检查一张网卡。
         """
         if self._tun is not None and not self._owns_tun:
             return  # 注入的 tun（离线测试），没有对应的真实接口可查
@@ -234,10 +241,14 @@ class ProviderL3Service(_L3ServiceBase):
 
         offsite = sorted({svc.ip for svc in self.config.services if svc.ip != self.config.tun_ip})
         if not offsite:
+            from ..tun.device_win import warn_if_weak_host_disabled
+
             logger.info(
-                "服务地址全部绑在 %s(%s) 自己身上（§2.5 虚服务地址方案），"
-                "不需要弱主机模型开关", self.config.tun_name, self.config.tun_ip,
+                "服务地址全部绑在 %s(%s) 自己身上（§2.5 / D18 虚服务地址方案）："
+                "不需要在服务网卡上放宽主机模型，只检查 %s 自己的两个开关",
+                self.config.tun_name, self.config.tun_ip, self.config.tun_name,
             )
+            warn_if_weak_host_disabled(self.config.tun_name)
             return
         if not self.config.weak_host:
             logger.warning(
