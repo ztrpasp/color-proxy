@@ -69,6 +69,22 @@ def check_listener(port: int) -> tuple[bool, str]:
     return True, f"监听在 {addresses}"
 
 
+def check_local_address(ip: str) -> tuple[bool, str]:
+    """目标服务地址是否真的配在本机某个接口上。
+
+    这一条设计的 §11 M1b 没列，但在开发机上最容易先撞到：按 D9 发布的是提供端**物理
+    网卡地址**（172.10.0.2），若本机根本没有这个地址，内层包递上来后既不是本机地址、
+    也没有转发目标，会被直接丢弃——症状和弱主机模型丢弃一模一样，但病因完全不同。
+    """
+    code, output = _powershell(
+        f"(Get-NetIPAddress -IPAddress '{ip}' -ErrorAction SilentlyContinue"
+        " | Select-Object -ExpandProperty InterfaceAlias) -join ','"
+    )
+    if code != 0 or not output:
+        return False, f"{ip} 不在本机任何接口上"
+    return True, f"{ip} 配在 {output}"
+
+
 def check_firewall(alias: str) -> tuple[bool, str]:
     """§2.6 第 3 条：Wintun 适配器在 Windows 眼里是新网卡，NLA 大概率归为"公用网络"。"""
     code, output = _powershell(
@@ -160,7 +176,15 @@ def main() -> int:
     print(f"M1b 注入验证：{inner_src} → {service_ip}:{port}（经 {l3.tun_name}，不接 CoLoR）")
     print("=" * 72)
 
-    # --- 先查不依赖 tun 的那一件：源站监听地址 -----------------------------
+    # --- 先查两件不依赖 tun 的：目标地址在不在本机、源站听在哪 --------------
+    address_ok, address_note = check_local_address(service_ip)
+    print(f"[{'OK' if address_ok else '!!'}] 目标地址归属：{address_note}")
+    if not address_ok:
+        print(f"     按 D9，发布的是提供端物理网卡地址。本机没有 {service_ip} 的话，"
+              "内层包递上来会被直接丢弃（症状与弱主机丢弃相同）。")
+        print(f"     要么在本机物理网卡上配好 {service_ip}（§2.1 的地址规划），"
+              "要么临时改用 --port 配合一个已存在的本机地址重试。")
+
     listener_ok, listener_note = check_listener(port)
     print(f"[{'OK' if listener_ok else '!!'}] 源站监听（§2.6 第 4 条）：{listener_note}")
 
@@ -211,6 +235,7 @@ def main() -> int:
         print("=" * 72)
         print("❌ 超时：没读回 SYN-ACK 也没读回 RST。按下面的顺序查（症状完全一样，逐个排除）：")
         for ok, name, hint in (
+            (address_ok, "目标地址在本机", f"{service_ip} 不在本机任何接口上，见上面的说明"),
             (weak_ok, "弱主机模型开关", "见上面 warn_if_weak_host_disabled 打印的两条 netsh 命令"),
             (firewall_ok, "防火墙/网络类别",
              f'Set-NetConnectionProfile -InterfaceAlias "{l3.tun_name}" -NetworkCategory Private；'
