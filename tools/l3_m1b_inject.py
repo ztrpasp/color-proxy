@@ -44,6 +44,14 @@ from colorproxy.tun.device_win import (
     warn_if_weak_host_disabled,
 )
 
+# 控制台编码兜底：中文 Windows 控制台默认 GBK，打印非 ASCII 标记会抛 UnicodeEncodeError
+# 把整个脚本带崩（输出被重定向到管道时尤其容易撞上）。诊断脚本不该因为一个字符死掉。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except (AttributeError, OSError):
+        pass
+
 logger = logging.getLogger("m1b")
 
 
