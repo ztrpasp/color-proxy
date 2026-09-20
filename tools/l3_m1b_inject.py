@@ -69,6 +69,86 @@ def check_listener(port: int) -> tuple[bool, str]:
     return True, f"监听在 {addresses}"
 
 
+#: --configure 时加的入站放行规则名（退出时删掉）
+FIREWALL_RULE = "color-tun-m1b"
+
+
+def enable_weak_host(alias: str) -> bool:
+    """给刚创建的 color0 打开两个弱主机开关（§2.3，D9）。
+
+    **只有 --configure 时才调，且只作用于本脚本自己创建的 tun 接口。**
+    代理进程永远不做这件事（§9.1 明确要求只检查告警、不改系统配置）：改主机模型影响
+    整机网络行为。这里之所以要代劳，是因为 color0 由本脚本创建、退出即删，开关挂在它
+    身上，手工设置根本来不及。适配器删除后这两个设置随之消失，不留残留。
+    """
+    ok = True
+    for switch in ("weakhostreceive", "weakhostsend"):
+        try:
+            _netsh_set(alias, switch)
+        except OSError as exc:
+            logger.warning("打开 %s 失败：%s", switch, exc)
+            ok = False
+    return ok
+
+
+def _netsh_set(alias: str, switch: str) -> None:
+    result = subprocess.run(
+        ("netsh", "interface", "ipv4", "set", "interface", alias, f"{switch}=enabled"),
+        capture_output=True, text=True, encoding="mbcs", errors="replace",
+    )
+    if result.returncode != 0:
+        raise OSError(f"{result.stdout.strip()} {result.stderr.strip()}".strip())
+
+
+def allow_firewall(alias: str) -> bool:
+    """把 tun 的网络类别设为 Private 并加一条入站放行（§2.6 第 3 条）。
+
+    Wintun 适配器在 Windows 眼里是新网卡，NLA 大概率归为"公用网络"，入站几乎全拦；
+    包会被正常投递到 IP 层然后死在 WFP 上，**症状和强主机丢弃一模一样**。
+    退出时删掉规则（见 remove_firewall_rule）。
+    """
+    ok = True
+    # NLA 可能还没给新适配器归类，重试几次
+    for attempt in range(5):
+        code, output = _powershell(
+            f"Set-NetConnectionProfile -InterfaceAlias '{alias}' "
+            "-NetworkCategory Private -ErrorAction Stop"
+        )
+        if code == 0:
+            break
+        if attempt == 4:
+            logger.warning("设置网络类别失败（NLA 还没归类？）：%s", output.splitlines()[:1])
+            ok = False
+        time.sleep(0.5)
+
+    code, output = _powershell(
+        f"New-NetFirewallRule -DisplayName '{FIREWALL_RULE}' -Direction Inbound "
+        f"-InterfaceAlias '{alias}' -Action Allow -ErrorAction Stop | Out-Null"
+    )
+    if code != 0:
+        logger.warning("添加入站放行规则失败：%s", output.splitlines()[:1])
+        ok = False
+    return ok
+
+
+def remove_firewall_rule() -> None:
+    _powershell(
+        f"Remove-NetFirewallRule -DisplayName '{FIREWALL_RULE}' -ErrorAction SilentlyContinue"
+    )
+
+
+def list_adapters() -> list[str]:
+    """列出本机可用的 IPv4 接口别名，供"该把服务地址加到哪张网卡"参考。"""
+    code, output = _powershell(
+        "(Get-NetIPInterface -AddressFamily IPv4 -ConnectionState Connected"
+        " | Where-Object { $_.InterfaceAlias -notlike 'Loopback*' }"
+        " | Select-Object -ExpandProperty InterfaceAlias) -join '|'"
+    )
+    if code != 0 or not output:
+        return []
+    return [item.strip() for item in output.split("|") if item.strip()]
+
+
 def check_local_address(ip: str) -> tuple[bool, str]:
     """目标服务地址是否真的配在本机某个接口上。
 
@@ -144,6 +224,11 @@ def main() -> int:
     parser.add_argument("--port", type=int, help="目标服务端口（默认取 l3.services 第一条 tcp）")
     parser.add_argument("--sport", type=int, default=51000, help="伪造的客户端源端口")
     parser.add_argument("--timeout", type=float, default=5.0, help="等待回程包的秒数")
+    parser.add_argument(
+        "--configure", action="store_true",
+        help="替本次测试准备 color0：开两个弱主机开关 + 网络类别设 Private + 加入站放行"
+             "（只作用于本脚本创建的 tun，退出时随适配器一起消失；代理进程永不做这些）",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -180,10 +265,14 @@ def main() -> int:
     address_ok, address_note = check_local_address(service_ip)
     print(f"[{'OK' if address_ok else '!!'}] 目标地址归属：{address_note}")
     if not address_ok:
-        print(f"     按 D9，发布的是提供端物理网卡地址。本机没有 {service_ip} 的话，"
-              "内层包递上来会被直接丢弃（症状与弱主机丢弃相同）。")
-        print(f"     要么在本机物理网卡上配好 {service_ip}（§2.1 的地址规划），"
-              "要么临时改用 --port 配合一个已存在的本机地址重试。")
+        print(f"     按 D9，发布的是提供端物理网卡地址。本机没有 {service_ip} 的话，内层包")
+        print("     递上来既不是本机地址、也没有转发目标，会被直接丢弃——症状与弱主机丢弃相同。")
+        print(f"     补一个地址即可（挑一张 host-only / 内网网卡，不影响外部连通性）：")
+        print(f'       netsh interface ipv4 add address "<网卡名>" {service_ip} 255.255.255.0')
+        print(f'       netsh interface ipv4 delete address "<网卡名>" {service_ip}   # 测完清理')
+        candidates = list_adapters()
+        if candidates:
+            print(f"     本机候选网卡：{candidates}")
 
     listener_ok, listener_note = check_listener(port)
     print(f"[{'OK' if listener_ok else '!!'}] 源站监听（§2.6 第 4 条）：{listener_note}")
@@ -202,6 +291,13 @@ def main() -> int:
         print(f"[--] 接口状态：index={state['index']} mtu={state['mtu']}")
         if state["mtu"] not in (None, l3.tun_mtu):
             print(f"[!!] MTU 是 {state['mtu']}，期望 {l3.tun_mtu}（§2.6 第 2 条）")
+
+        if args.configure:
+            # color0 由本脚本创建、退出即删，开关挂在它身上，手工设置来不及，故代劳。
+            # 代理进程永远不做这件事（§9.1）。
+            print(f"[--] --configure：准备 {l3.tun_name} 的弱主机开关与防火墙…")
+            enable_weak_host(l3.tun_name)
+            allow_firewall(l3.tun_name)
 
         weak_ok = warn_if_weak_host_disabled(l3.tun_name)
         print(f"[{'OK' if weak_ok else '!!'}] 弱主机模型（§2.3，D9）："
@@ -249,8 +345,12 @@ def main() -> int:
         print("=" * 72)
         return 1
     finally:
+        if args.configure:
+            remove_firewall_rule()
         device.close()
-        print("已清理：适配器与路由都已删除。")
+        print("已清理：适配器与路由都已删除"
+              + ("，入站放行规则也已删除。" if args.configure else "。")
+              + "（弱主机开关随适配器一起消失，不留残留）")
 
 
 if __name__ == "__main__":
