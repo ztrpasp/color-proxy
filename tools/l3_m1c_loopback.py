@@ -419,10 +419,17 @@ def _consumer_state(config, provider_config, provider_ipv4: str) -> ConsumerStat
 
 
 class _OriginServer(http.server.ThreadingHTTPServer):
-    """最小源站：绑 0.0.0.0，保证从 tun 递上来的包收得到（§2.6 第 4 条）。"""
+    """最小源站：绑 0.0.0.0，保证从 tun 递上来的包收得到（§2.6 第 4 条）。
+
+    ``allow_reuse_address`` 刻意为 **False**。Windows 上 SO_REUSEADDR 的语义与 Unix
+    不同：它允许两个 socket 绑同一个 addr:port，此后**哪个收到连接是未定义的**。
+    2026-09-21 M1c 真机就撞上了——机器上另有一个 `python -m http.server` 在听 8000，
+    本脚本的源站"绑成功了"，答话的却是那一个，判据于是挂在最后一步，看着像隧道不通，
+    其实整条链路是通的。绑不上就报错，比静默共存好得多。
+    """
 
     daemon_threads = True
-    allow_reuse_address = True
+    allow_reuse_address = False
 
 
 class _OriginHandler(http.server.BaseHTTPRequestHandler):
@@ -460,9 +467,21 @@ def run_provider_half(provider_config, consumer_config, udp_port: int,
         print(f"  注意：服务地址 {service.ip} 不是 tun 自己的地址（D9 方案），"
               "需要四个弱主机开关，见设计 §2.3")
 
-    origin = _OriginServer(("0.0.0.0", service.port), _OriginHandler)
-    threading.Thread(target=origin.serve_forever, daemon=True, name="Origin").start()
-    print(f"  源站已在 0.0.0.0:{service.port} 起好")
+    # 端口已被占用时**不抢**：用现成的那个源站，并把判据放宽到"拿到一个 HTTP 响应"。
+    # M1c 要证明的是"一次完整请求-响应穿过了真 tun 与真内核"，不是"答话的是我这个
+    # handler"——后者一旦和别的服务撞端口就会报假失败。
+    existing, listener_detail = check_listener(service.port)
+    origin: _OriginServer | None = None
+    if existing:
+        print(f"  源站：沿用已在监听的那个（{listener_detail}），不另起、不抢端口")
+    else:
+        try:
+            origin = _OriginServer(("0.0.0.0", service.port), _OriginHandler)
+        except OSError as exc:
+            print(f"  [FAIL] 起不来源站：{exc}。换 --port 或先停掉占用方")
+            return False
+        threading.Thread(target=origin.serve_forever, daemon=True, name="Origin").start()
+        print(f"  源站已在 0.0.0.0:{service.port} 起好")
 
     provider_state = _provider_state(provider_config, consumer_config.nid, consumer_config.ipv4)
     consumer_state = _consumer_state(consumer_config, provider_config, provider_config.ipv4)
@@ -497,6 +516,9 @@ def run_provider_half(provider_config, consumer_config, udp_port: int,
         describe_interface(provider_config.l3.tun_name)
         listening, detail = check_listener(service.port)
         print(f"  {'[PASS]' if listening else '[FAIL]'} 源站监听：{detail}")
+        if listening and "0.0.0.0" not in detail and service.ip not in detail:
+            print("  [诊断] 源站没监听在 0.0.0.0 也没监听在服务地址上，"
+                  "从 tun 递上来的包到了也没人收（§2.6 第 4 条）")
         # 回程判据：源站回给消费端 tun 地址的包，内核必须选 color0 发出去
         find_net_route(consumer_tun_ip, provider_config.l3.tun_name, service.ip)
         print("  --- 预检完 ---")
@@ -519,7 +541,10 @@ def run_provider_half(provider_config, consumer_config, udp_port: int,
 
         clamp = provider_config.l3.mss_clamp
         rewrote = provider.counters.get("mss_clamped") > 0
-        ok = bool(body and b"m1c-ok" in body)
+        # 判据：拿到一个完整的 HTTP 响应即算通过（这才是 M1c 要证明的事）。
+        # 源站是本脚本起的时候，再额外核对一下响应体，把"答话的是谁"也钉住。
+        got_http = bool(body and body.startswith(b"HTTP/1."))
+        ok = got_http and (origin is None or b"m1c-ok" in body)
         _report_half(ok, provider, consumer, [
             # 注意判据的措辞：源站的 SYN-ACK 是内核按 colorP 的 MTU(1280) 发出的，
             # 内核自己就会填 MSS=1240，所以 clamp 多半是**空操作**。这里真正验证的是
@@ -529,13 +554,18 @@ def run_provider_half(provider_config, consumer_config, udp_port: int,
              client.peer_mss is not None and client.peer_mss <= clamp,
              f"MSS={client.peer_mss}；提供端 clamp "
              f"{'改写过' if rewrote else '未触发（内核已按 MTU 填对，正常）'}"),
-            ("HTTP 响应体正确", ok, repr(body[:60]) if body else "没拿到响应"),
+            ("一次完整的 HTTP 请求-响应穿过了真 tun", got_http,
+             repr(body[:70]) if body else "没拿到响应"),
+            ("响应确实来自本脚本起的源站", origin is None or (body or b"").find(b"m1c-ok") >= 0,
+             "沿用了外部源站，本条不作判据" if origin is None else
+             "响应不是本脚本那个源站答的——端口上还有别人？"),
         ], warnings)
     finally:
         warnings.remove()
         recv_c.stop(); recv_p.stop()
         consumer.stop(); provider.stop()
-        origin.shutdown(); origin.server_close()
+        if origin is not None:
+            origin.shutdown(); origin.server_close()
         to_provider.close(); to_consumer.close()
         remove_firewall_rule()
     return ok

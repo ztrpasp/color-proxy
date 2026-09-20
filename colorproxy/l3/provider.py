@@ -47,6 +47,8 @@ class L3Provider:
         self.counters = counters if counters is not None else Counters()
         self.tunnels = L3TunnelTable()
         self.mss_clamp = mss_clamp if mss_clamp is not None else state.config.l3.mss_clamp
+        # 本网段的定向广播地址，用来识别 NetBIOS 一类的本机噪声（见 _is_noise）
+        self._broadcast = ipv4.subnet_broadcast(state.config.l3.tun_ip, state.config.l3.tun_mask)
 
     # ------------------------------------------------------------ 握手（§5 ①②）
 
@@ -198,6 +200,8 @@ class L3Provider:
         if header is None:
             self.counters.bump("nonipv4_drop")
             return False
+        if self._is_noise(header):
+            return False
         if not header.is_tunnelable:
             self.counters.bump("proto_drop")
             return False
@@ -250,6 +254,21 @@ class L3Provider:
         return True
 
     # ---------------------------------------------------------------- 公共
+
+    def _is_noise(self, header: ipv4.Ipv4Header) -> bool:
+        """本机往 tun 上发的广播/组播噪声，静默丢弃 + 单独计数。
+
+        隧道是点对点的，广播组播本来就不该进去。单独计数而不是并进 ``sid_miss``：
+        M1c 真机上这类包每秒好几个（NetBIOS 137、mDNS 5353、SSDP/WSD），并进去会
+        把 ``sid_miss`` 撑到几十，而 §10.4 给 ``sid_miss`` 的含义是"路由把不该进的
+        流量导进了 tun"——一个要改配置、一个什么都不用做，混在一起等于没有诊断。
+        同理不打 warning：逐包刷屏会把真正有信息量的那几行冲掉。
+        """
+        if ipv4.is_multicast(header.dst) or header.dst == ipv4.LIMITED_BROADCAST \
+                or (self._broadcast is not None and header.dst == self._broadcast):
+            self.counters.bump("nonunicast_drop")
+            return True
+        return False
 
     def _clamped(self, inner: bytes, header: ipv4.Ipv4Header) -> bytes:
         """需要时改写 MSS（§6.2）。非握手包原样返回，不做无谓的复制。"""

@@ -891,7 +891,7 @@ L3 模式的故障大多表现为静默丢包，没有计数器几乎无法定�
 ```
 tun_rx / tun_tx / sid_hit / sid_miss / tunnel_up
 / colr_tx / colr_rx / admit_drop / src_bind_drop / no_peer_drop
-/ frag_drop / mtu_drop / no_tunnel_drop / nonipv4_drop / proto_drop
+/ frag_drop / mtu_drop / no_tunnel_drop / nonipv4_drop / nonunicast_drop / proto_drop
 / load0_mismatch
 ```
 
@@ -904,6 +904,7 @@ tun_rx / tun_tx / sid_hit / sid_miss / tunnel_up
 | `no_tunnel_drop` | 回程查不到隧道 | 隧道已静默失效（§8.4），或 `peers[]` 与 NID 对不上 |
 | `sid_miss` | 算出的 SID 不在表中 | 路由把不该进的流量导进了 tun；回送方向则是源服务未发布 |
 | `frag_drop` | 内层包被分片（D15） | 内层 UDP 数据报超过 1252 字节，见 §7.1 第 3 步 |
+| `nonunicast_drop` | 本机往 tun 上发的广播/组播 | **正常现象，不用管**。新建的 tun 上 mDNS/SSDP/NetBIOS/IGMP 每秒好几个。rev.4 起单独计数：混进 `sid_miss` 会把"路由配宽了"这个诊断彻底淹掉（M1c 真机一次 7 秒的运行里 20 个 `sid_miss` 全是噪声） |
 | `load0_mismatch` | `load[0]` 类型位与 SID 所属模式不符 | 对端实现的 `load[0]` 与本文不一致；**不影响转发**，只作诊断（D13） |
 
 ---
@@ -915,7 +916,7 @@ tun_rx / tun_tx / sid_hit / sid_miss / tunnel_up
 | **M0** ✅ | 冻结本契约；`WEB_MSG_TYPE_MASK` 扩展；`_l3_services` / `peers[]` 两张表与配置校验；修掉 §9.3 的四个 v1 遗留问题 | v1 全部测试仍然全绿 |
 | **M1a** ✅ | Wintun 封装 + `ipv4.py`（含 MF/frag_off）+ `mss.py` + `sid.py`，纯逻辑单测 | §3.4 测试向量全部命中；MSS clamp 后 TCP 校验和正确；分片包被正确识别 |
 | **M1b** ✅ | **注入验证**（`tools/l3_m1b_inject.py`）：提供端起 tun，直接 `write(color0)` 一个伪造 TCP SYN（src `10.99.1.1`，dst `172.10.0.2:8000`），看能否读回 SYN-ACK | **2026-09-20 已通过**。并查出 rev.2 §2.3 的错误（只开 color0 不够）与第五种同症状故障（服务地址不在本机）。脚本另做两个判据：半开连接检查分开「没进协议栈」与「回不来」；A/B 改用 tun 自身地址定位跨网卡投递 |
-| **M1c** ⬜真机 | **`tools/l3_m1c_loopback.py`**。rev.2 设想的「一台机器两个 tun」**不成立**：同一个内核上两个内层端点都是本机地址（服务地址是提供端 color0 的、消费端 tun 地址是消费端 color0 的），客户端 `connect` 被直接投给本地协议栈、回程也走环回，**TCP 会建成功但一个包都没进隧道**。改为两半各留一个真实端点，两半依次跑；有第二台机器时 `--peer` 跑完整单流 | 半 P：一次完整 HTTP 请求-响应穿过真 tun + 真内核注入 + 真源站；半 C：真客户端 `connect()` 完成并拿到响应，内核 SYN 的 MSS ≤ 1240。`--dry-run`（两侧均 LoopbackTun、免管理员）**2026-09-21 已通过** |
+| **M1c** ◑真机 | **`tools/l3_m1c_loopback.py`**。rev.2 设想的「一台机器两个 tun」**不成立**：同一个内核上两个内层端点都是本机地址（服务地址是提供端 color0 的、消费端 tun 地址是消费端 color0 的），客户端 `connect` 被直接投给本地协议栈、回程也走环回，**TCP 会建成功但一个包都没进隧道**。改为两半各留一个真实端点，两半依次跑；有第二台机器时 `--peer` 跑完整单流 | 半 P：一次完整 HTTP 请求-响应穿过真 tun + 真内核注入 + 真源站；半 C：真客户端 `connect()` 完成并拿到响应，内核 SYN 的 MSS ≤ 1240。`--dry-run`（两侧均 LoopbackTun、免管理员）**2026-09-21 已通过**；同日真机**半 C 已通过**，半 P 的链路也已打通（真实 HTTP 200 穿过真 tun 回来了）、只因撞上机器上另一个占用 8000 的源站而判据报假失败，已修，待重跑 |
 | **M2** ✅代码 | 两端装配接入 L3（`l3/service.py`、`provider.py`、`consumer/consumer.py`）：按 SID 分派（D13）、tun 读线程、周期任务；另补齐 §2.4 的第二道路由隔离校验 | 离线：`tests/test_l3_assembly.py` 12/12。**真机待 RM/BR 环境**：`Test-NetConnection 172.10.9.2 -Port 8000` 通 → `curl http://172.10.9.2:8000/hello.html` 通；伪造内层 src 的包被 `src_bind_drop` 拦下 |
 | **M3** ✅ | 首包缓冲、握手超时回收（由 ticker 统一拉起）、分片与 `mtu_drop` 计数、计数器日志（内容没变就不打）；另实现 §8.4 的下行静默重探 | 隧道建立失败有明确日志；大 UDP 计入 `frag_drop` 而非无声消失；`tests/test_l3_assembly.py` 覆盖超时确实被扫、重探确实原子替换 |
 | **M4** ◑离线 | 三个验收用例。**真客户端需要两台机器**（理由同 M1c），单机能做的部分已成离线回归 | 离线：`tests/test_l3_acceptance.py` 8/8——被动 FTP 的两条独立隧道与不串台、通配只放宽目的粒度、UDP 1252 边界与分片计数、长连接共用隧道。真机步骤与判据见 `docs/M4-acceptance.md` |

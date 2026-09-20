@@ -2,7 +2,8 @@
 
 > 对应 `docs/design-l3-v2.md` §11 的 M4：**被动 FTP 上传下载 / 一条视频流连续 5 分钟 /
 > MySQL 增删改查**。
-> 前置：M2 的两端装配已完成（`colorproxy/l3/service.py`），M1c 两半已在真机通过。
+> 前置：M2 的两端装配已完成（`colorproxy/l3/service.py`），M1c 两半已在真机通过
+> （2026-09-21：半 C 已通过，半 P 待重跑，见 `docs/HANDOVER-l3.md` §4①）。
 > 截至 2026-09-21。
 
 ---
@@ -45,10 +46,18 @@ Set-NetConnectionProfile -InterfaceAlias "color0" -NetworkCategory Private
 New-NetFirewallRule -DisplayName "color-tun" -Direction Inbound -InterfaceAlias "color0" -Action Allow
 ```
 
-> §2.5 下**不需要**任何弱主机模型开关（服务地址就在 color0 自己身上）。
-> 代理启动时会打印一行"服务地址全部绑在 color0 自己身上……不需要弱主机模型开关"
-> 来确认。若打印的是告警，说明 `l3.services[].ip` 配的不是 `l3.tun_ip`，回到 D9 方案
-> 了，按 §2.3 开四个开关。
+> **弱主机开关（按 §2.3 的 rev.4 勘误）**：§2.5 省掉的是**服务网卡上那两个**，
+> **color0 自己的两个仍要开**——M1b 唯一成功的那组实验里它们是开着的，从未被隔离
+> 验证过能关，而不开时的症状是"包写进 tun 了、`tun_tx` 也涨，协议栈连 RST 都不回"。
+> 代理只检查告警、不改系统配置（§9.1），所以要手工执行一次：
+>
+> ```powershell
+> netsh interface ipv4 set interface "color0" weakhostsend=enabled
+> netsh interface ipv4 set interface "color0" weakhostreceive=enabled
+> ```
+>
+> 若启动日志里的告警提到了**第二张网卡**，说明 `l3.services[].ip` 配的不是
+> `l3.tun_ip`，那是回到 D9 方案了，按 §2.3 四个全开。
 
 **三个服务端都必须 bind `0.0.0.0`**（§2.6 第 4 条）。只听 `127.0.0.1` 的话包到了也
 没人收，症状与丢包完全一样：
@@ -189,6 +198,10 @@ pps）能扛，50 Mbps 不行**。M5「去 scapy 数据面」尚未做，本轮�
 PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_acceptance.py   # 8/8
 ```
 
+> 真机跑之前还要确认一件事：**三个服务端口上不能有别的进程在听**。M1c 真机就撞过——
+> 机器上另有一个 `python -m http.server` 占着 8000，链路其实是通的，判据却挂在最后
+> 一步，看着像隧道不通。`netstat -ano | findstr ":21 :3306 :5004 :8000"` 先过一遍。
+
 它覆盖的（也就是不必在真机上重新摸索的）：
 
 | 用例 | 钉住的东西 |
@@ -211,6 +224,7 @@ PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_acceptance.py   # 8/8
 |---|---|---|
 | 完全不通，`tun_rx = 0` | 消费端 `tun_rx` | 路由没生效，流量没进 tun。`route print` 看 `172.10.9.2` 的下一跳 |
 | `tun_rx` 涨但 `sid_miss` 同步涨 | `sid_miss` | 算出的 SID 不在表中：服务没发布，或两端服务串不一致（IP/端口/协议任一不同即完全不同的哈希） |
+| `nonunicast_drop` 一直涨 | —— | **正常现象，不用管**：本机往 tun 上发的 mDNS/SSDP/NetBIOS/IGMP。新建的 tun 上每秒好几个 |
 | 隧道建起来了但一个包不过 | 提供端 `src_bind_drop` | 消费端 `l3.tun_ip` 与提供端 `l3.peers[].tun_ip` 不一致（D14） |
 | 能连上但访问别的端口也通 | 提供端 `admit_drop` | 发布了通配 `:0`，目的粒度退化到主机级（§8.3，预期行为） |
 | 小请求正常、大数据卡死 | 两端 `mss_clamped` | MSS clamp 只做了一侧，或某端 MTU 不是 1280（§6.2） |

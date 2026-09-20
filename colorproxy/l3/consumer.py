@@ -55,6 +55,8 @@ class L3Consumer:
         self.flows = FlowCache()
         self._seg_ids = itertools.count(1)
         self._seg_lock = threading.Lock()
+        # 本网段的定向广播地址，用来识别 NetBIOS 一类的本机噪声（见 _endpoint_for_lookup）
+        self._broadcast = ipv4.subnet_broadcast(self.config.tun_ip, self.config.tun_mask)
 
     # ------------------------------------------------------------ 上行（§7.1）
 
@@ -92,6 +94,14 @@ class L3Consumer:
         self, inner: bytes, header: ipv4.Ipv4Header
     ) -> tuple[str, str, int] | None:
         """取查表用的目的三元组，并在此处完成协议与分片两道过滤（§7.1 第 2、3 步）。"""
+        if ipv4.is_multicast(header.dst) or header.dst == ipv4.LIMITED_BROADCAST \
+                or (self._broadcast is not None and header.dst == self._broadcast):
+            # 本机往 tun 上发的广播/组播（mDNS/SSDP/NetBIOS）。隧道是点对点的，它们
+            # 本来就不该进去。**单独计数、不打 warning**：并进 sid_miss 会把"路由把
+            # 不该进的流量导进了 tun"这个诊断淹掉（M1c 真机上每秒好几个）。
+            self.counters.bump("nonunicast_drop")
+            return None
+
         if header.is_fragment:
             # D15：首片与非首片一律丢。非首片取不出端口；首片虽能算 SID，但后续片
             # 必被丢、收端无法重组，只发首片是浪费带宽。

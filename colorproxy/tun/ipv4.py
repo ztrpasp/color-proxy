@@ -115,6 +115,37 @@ def parse_ports(packet: bytes, header: Ipv4Header) -> tuple[int, int] | None:
     return _PORTS.unpack_from(packet, header.ihl)  # type: ignore[return-value]
 
 
+def is_multicast(address: bytes) -> bool:
+    """是否落在 ``224.0.0.0/4``。
+
+    新建的 tun 上本机会**持续**往外发 mDNS(224.0.0.251)、SSDP(239.255.255.250)、
+    IGMP 一类的组播，量很大。它们既不是隧道流量、也不是配置错误，必须单独识别：
+    混进 ``sid_miss`` 会把"路由把不该进的流量导进了 tun"这个诊断彻底淹掉
+    （M1c 真机实测：一次 7 秒的运行里 20 个 sid_miss 全是这种噪声）。
+    """
+    return 224 <= address[0] <= 239
+
+
+#: 受限广播地址 255.255.255.255
+LIMITED_BROADCAST = b"\xff\xff\xff\xff"
+
+
+def subnet_broadcast(ip: str, mask: str) -> bytes | None:
+    """算出某个网段的定向广播地址（如 ``172.10.9.2/24`` → ``172.10.9.255``）。
+
+    NetBIOS(137) 一类的噪声发往**定向广播**，光判组播抓不到它。只在启动时算一次，
+    故这里用 ``ipaddress`` 求清楚，不图快。取不到时返回 ``None``（调用方按"没有
+    这个判据"处理，不要当成 0.0.0.0）。
+    """
+    import ipaddress
+
+    try:
+        network = ipaddress.IPv4Network(f"{ip}/{mask}", strict=False)
+    except ValueError:
+        return None
+    return network.broadcast_address.packed
+
+
 def format_ipv4(address: bytes) -> str:
     """4 字节网络序 → 点分十进制。比 ``socket.inet_ntoa`` 快，且无需导入 socket。"""
     return f"{address[0]}.{address[1]}.{address[2]}.{address[3]}"

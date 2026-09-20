@@ -24,6 +24,7 @@ COUNTER_HELP: dict[str, str] = {
     "frag_drop": "内层包被分片（D15）：内层 UDP 数据报超过 1252 字节",
     "mtu_drop": "内层包超过 tun MTU（§6.3，D3 拓扑下近乎不触发）",
     "nonipv4_drop": "非 IPv4 或 IPv4 头自相矛盾",
+    "nonunicast_drop": "本机往 tun 上发的广播/组播噪声（mDNS/SSDP/NetBIOS/IGMP）：正常现象，不是配置错误",
     "proto_drop": "非 TCP/UDP，不进隧道（D11）",
     "load0_mismatch": "load[0] 类型位与 SID 所属模式不符；不影响转发，只作诊断（D13）",
     "mss_clamped": "改写过 MSS 的握手包数",

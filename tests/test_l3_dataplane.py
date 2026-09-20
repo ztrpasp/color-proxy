@@ -473,6 +473,49 @@ def test_provider_hands_back_non_l3_sid() -> None:
     assert provider.handle_get(bytes(build_get(web_sid, CONSUMER_NID, 1))) is False
 
 
+def test_local_multicast_noise_is_counted_separately() -> None:
+    """本机往 tun 上发的组播（mDNS/SSDP）单独计数，不得混进 sid_miss。
+
+    M1c 真机实测：新建的 tun 上这类包每秒好几个，一次 7 秒的运行里 20 个 sid_miss
+    全是它们。而 §10.4 给 sid_miss 的含义是"路由把不该进的流量导进了 tun"——一个要
+    改配置、一个什么都不用做，混在一起等于没有诊断。
+    """
+    _link, provider, consumer = _wire()
+
+    for dst, dport in (("239.255.255.250", 3702), ("224.0.0.251", 5353)):
+        packet = bytes(IP(bytes(
+            IP(src=CONSUMER_TUN, dst=dst) / UDP(sport=50000, dport=dport) / Raw(b"x" * 40)
+        )))
+        assert consumer.on_tun_packet(packet) is False
+    assert consumer.counters.get("nonunicast_drop") == 2
+    assert consumer.counters.get("sid_miss") == 0, "噪声不得计进 sid_miss"
+
+    # 提供端的回送方向同样会读到这些包（服务地址就在 tun 上，噪声源地址正是它）
+    noise = bytes(IP(bytes(
+        IP(src=PROVIDER_TUN, dst="224.0.0.251") / UDP(sport=5353, dport=5353) / Raw(b"x" * 40)
+    )))
+    assert provider.on_tun_packet(noise) is False
+    assert provider.counters.get("nonunicast_drop") == 1
+    assert provider.counters.get("sid_miss") == 0
+
+
+def test_subnet_broadcast_noise_is_counted_separately() -> None:
+    """定向广播（NetBIOS 137 就是这么发的）光判组播抓不到，要按本网段算。"""
+    _link, provider, consumer = _wire()
+    packet = bytes(IP(bytes(
+        IP(src=CONSUMER_TUN, dst="10.99.1.255") / UDP(sport=137, dport=137) / Raw(b"x" * 40)
+    )))
+    assert consumer.on_tun_packet(packet) is False
+    assert consumer.counters.get("nonunicast_drop") == 1
+    assert consumer.counters.get("sid_miss") == 0
+
+    limited = bytes(IP(bytes(
+        IP(src=PROVIDER_TUN, dst="255.255.255.255") / UDP(sport=68, dport=67) / Raw(b"x" * 40)
+    )))
+    assert provider.on_tun_packet(limited) is False
+    assert provider.counters.get("nonunicast_drop") == 1
+
+
 def _run_all() -> int:
     funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
