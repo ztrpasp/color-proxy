@@ -33,6 +33,9 @@
 ### 提供端机器 P
 
 ```powershell
+# 0) 先起源站，且必须 bind 0.0.0.0 —— 只听 127.0.0.1 的话 L3 这条路一定哑火（见下）
+python tools/origin_server.py --host 0.0.0.0 --port 8000
+
 # 1) 起代理（会自己创建 color0、配 172.10.9.2/24、MTU 1280、加 10.99.1.0/24 路由）
 #    先把 config.json 的 l3.enabled 改成 true
 python -m colorproxy.main config.json -v
@@ -59,12 +62,19 @@ New-NetFirewallRule -DisplayName "color-tun" -Direction Inbound -InterfaceAlias 
 > 若启动日志里的告警提到了**第二张网卡**，说明 `l3.services[].ip` 配的不是
 > `l3.tun_ip`，那是回到 D9 方案了，按 §2.3 四个全开。
 
-**三个服务端都必须 bind `0.0.0.0`**（§2.6 第 4 条）。只听 `127.0.0.1` 的话包到了也
-没人收，症状与丢包完全一样：
+**全部服务端都必须 bind `0.0.0.0`**（§2.6 第 4 条）。只听 `127.0.0.1` 的话包到了也
+没人收，症状与丢包完全一样——这是整条链路**最常见的哑火点**，而且计数器上看不出来：
+隧道建得起来、`tun_tx` 照涨，客户端只看到超时（防火墙吃掉 RST 时）或拒绝连接。
 
 ```powershell
-netstat -ano | findstr ":21 :3306 :5004"
+netstat -ano | findstr ":8000 :21 :3306 :5004 :8554"   # 左列必须是 0.0.0.0:xxxx，不能是 127.0.0.1:xxxx
 ```
+
+> **两条路径为什么表现不一样**：v1 内容级的回源是提供端本机发起的普通 TCP 连接，
+> `services[].origin_host` 写成 `127.0.0.1` 就能连上（写 `172.10.0.2` 而源站只听回环
+> 时报「目标计算机积极拒绝连接」）；L3 服务级则是把内层包直接注入协议栈，目的地址
+> 恒为 `l3.services[].ip`（=`172.10.9.2`），源站不在那个地址上听就没人收。**所以
+> v1 通不代表 L3 通。** 代理启动时会对每条 TCP 服务探一次，没人监听会打一行告警。
 
 ### 消费端机器 C
 
@@ -129,95 +139,276 @@ RM/BR；不接 CoLoR 而只想验内层链路的话，跑 `tools/l3_m1c_loopback
 
 ## 2. 用例一：被动 FTP 上传下载
 
-### 发布
+### 2.1 起 FTP 源站（P 上）
 
-`config.json` 的 `l3.services[]` 需要**两条**：
-
-```json
-{ "proto": "tcp", "ip": "172.10.9.2", "port": 21, "desc": "FTP 控制" },
-{ "proto": "tcp", "ip": "172.10.9.2", "port": 0,  "desc": "FTP 被动数据（通配）" }
+```powershell
+pip install pyftpdlib
+python tools/ftp_server.py --make-testfile 10
 ```
 
-数据连接用临时端口，逐个发布 SID 不现实，只能通配（§3.3）。**通配是另一条 SID、
-另一条隧道**：控制连接与数据连接分别走两条，两端各持两条隧道记录。
+默认：`0.0.0.0:21`、账号 `color/color`、根目录 `./ftproot`、被动端口段 `50000-50010`，
+并顺手造一个 10 MB 的 `test-10mb.bin` 供下载用例。**不需要管理员**——Windows 对
+1024 以下的端口没有特权限制。常用开关：
 
-> 若 FTP server 支持配置被动端口段（如 50000–50100），**优先按段逐条发布**，比通配
-> 整机干净得多（§8.3）。代价是配置里多几十行。
+| 开关 | 用途 |
+|---|---|
+| `--passive-ports 50000-50004` | 改被动端口段（段越小，要发布的 SID 越少） |
+| `--print-services` | 只打印要粘进 `config.json` 的 `l3.services[]`，不起服务 |
+| `--make-testfile 100` | 造更大的测试文件 |
+| `--anonymous` | 额外允许匿名只读登录 |
+| `--masquerade 172.10.9.2` | PASV 回复里强制通告这个地址（默认不用，见 2.5） |
 
-### 步骤
+起好后确认监听地址是 `0.0.0.0`：
 
-1. P 上起 FTP server（`pyftpdlib` 或 FileZilla Server），`bind 0.0.0.0:21`，
-   **被动模式**，被动端口段若可配则设 50000–50010 并逐条发布。
-2. C 上用 FileZilla / `ftp` 客户端连 `172.10.9.2:21`，**必须选被动模式（PASV）**。
-3. 下载一个 ≥ 10 MB 的文件，再上传一个 ≥ 10 MB 的文件，校验 MD5 一致。
+```powershell
+netstat -ano | findstr ":21 "
+```
 
-### 判据
+### 2.2 发布（改 `config.json` 的 `l3.services[]`）
 
-- 两端计数器里 `tunnel_up = 2`（控制 + 通配各一条）。
-- `admit_drop = 0`、`src_bind_drop = 0`、`no_tunnel_drop = 0`。
-- 上传下载的 MD5 与原文件一致。
+被动数据连接用的是端口段里的端口，**每个端口都是另一条 SID、另一条隧道**（§3.3）。
+两种写法，脚本把两份都打出来：
 
-### 已知不支持
+```powershell
+python tools/ftp_server.py --print-services --passive-ports 50000-50010
+```
 
-**主动模式 FTP 一定不通**（§8.1）：主动模式要服务端反向发起连接，CoLoR 是拉驱动，
-提供端无法主动建隧道。客户端必须显式选被动模式，这不是缺陷、是结构性限制。
+- **逐条发布**（推荐）：控制口 21 + 段里每个端口各一条。目的粒度精确到端口，
+  `admit_drop` 才有意义。代价是配置里多十几行。
+- **通配**：只发 `21` 和 `{"port": 0}` 两条。配置短，但目的粒度退化到主机级——
+  持有这条 SID 的消费端能打到 `172.10.9.2` 的**任意 TCP 端口**（§8.3，预期行为）。
+
+改完 `config.json` **要重启提供端代理**（新 SID 在启动时发 ANN）。消费端也要重启：
+本域 SID 表是启动时从 RM 拉一次的。没有 RM 时在消费端 `l3.static_services[]` 里
+预置同样的三元组（§9.2）。
+
+### 2.3 客户端（C 上，**必须被动模式**）
+
+```powershell
+# 下载
+curl --ftp-pasv -u color:color ftp://172.10.9.2/test-10mb.bin -o test-10mb.bin
+# 上传
+curl --ftp-pasv -u color:color -T .\upload.bin ftp://172.10.9.2/
+# 校验（和 P 上 ftproot\ 里的对比）
+Get-FileHash .\test-10mb.bin -Algorithm MD5
+```
+
+FileZilla：站点管理器 → 传输设置 → **被动**。Windows 自带的 `ftp.exe` **只有主动
+模式，不能用**（见 2.5）。
+
+### 2.4 判据
+
+- 提供端 `tunnel_up`：逐条发布时 = 1（控制）+ 实际用到的被动端口数；通配发布时 = 2。
+- `admit_drop = 0`、`src_bind_drop = 0`、`no_tunnel_drop = 0`、`sid_miss = 0`、`frag_drop = 0`。
+- 上传、下载两个方向的 MD5 都与原文件一致。
+- 10 MB 能传完。**卡在几十 KB = MSS clamp 只做了一侧**（§6.2）：查两端 color0 的
+  MTU 是否都是 1280、`mss_clamped` 是否都 > 0。
+
+### 2.5 已知不支持与常见坑
+
+- **主动模式一定不通**（§8.1）。主动模式要服务端反向 connect 客户端，CoLoR 是拉驱动，
+  提供端建不了隧道。这是结构性限制，不是缺陷。
+- **登录成功、`ls` 就卡住** = 数据连接那条 SID 没发布。`LIST` 也走数据连接，所以
+  "能登录"只证明控制口那条隧道通。看消费端 `sid_miss` 是不是在涨。
+- **PASV 回复的地址**：pyftpdlib 用控制连接的本地地址回复，经隧道进来时正好是
+  `172.10.9.2`，一般不用管。客户端若报"PASV 给的地址连不上"，加
+  `--masquerade 172.10.9.2`。
+- **防火墙**：§1 第 3 步那条 color0 入站放行规则要在，否则数据连接的 SYN 进去了
+  没人应答，表现与丢包一样。
 
 ---
 
 ## 3. 用例二：一条视频流连续 5 分钟
 
-### 硬约束（先读这一条，否则一定踩）
+### 3.0 先读这条：**不能用推流**
 
-> **内层 UDP 数据报净载荷必须 ≤ 1252 字节**（= 1280 − 20 IP − 8 UDP）。
+CoLoR 是"先拉后推"，**隧道只能由消费端的第一个上行包触发**（消费端从 tun 读到包 →
+算 SID → 发 GET → 建隧道）。提供端**无法主动**朝消费端开一条流。
 
-超过就会被内核按 tun MTU 分片，而分片按 D15 **一律丢弃、不重组**。症状是
-"小包通、大 UDP 静默丢"，而且在 `frag_drop` 之外没有任何迹象。
+所以 `VLC 串流 → RTP/UDP` 直接往消费端推是**建不了隧道**的（rev.5 勘误：本节旧版
+写的就是这种推流，不成立）。能跑的只有两类：
 
-RTP/RTCP 默认远小于此值；编码器若可配 MTU，**配 1200 更稳**。
+| | 方案 A：请求驱动的 RTP/UDP | 方案 B：RTSP over **TCP** |
+|---|---|---|
+| 测到的 | UDP 路径、1252 净载荷硬约束、长时间单隧道 | 真播放器、真解码、TCP 长连接 |
+| 画面 | 无（合成码流，判据靠统计） | 有 |
+| 工具 | `tools/rtp_video.py`（本仓库） | MediaMTX / ffmpeg + ffplay / VLC |
 
-### 步骤
+两个都跑最好：A 给精确判据，B 证明真播放器能用。
 
-1. P 上发 RTP 流到 `172.10.9.2:5004`（VLC「串流」→ RTP/UDP，或 ffmpeg
-   `-f rtp rtp://…:5004`），MTU 配 1200。
-2. `config.json` 发布 `{ "proto": "udp", "ip": "172.10.9.2", "port": 5004 }`。
-3. C 上用 VLC 打开 `rtp://@:5004`，**连续播放 5 分钟**，期间记录计数器。
+### 3.1 硬约束：内层 UDP 净载荷 ≤ 1252 字节
 
-### 判据
+> `1280（tun MTU） − 20（IP） − 8（UDP） = 1252`
 
-- 播放全程无中断、无明显花屏。
-- `frag_drop = 0`（有值就说明净载荷超了 1252，回去调编码器 MTU）。
-- `tunnel_up = 1` 且全程不变（D1：隧道长期有效，不刷新不回收）。
-- `tun_rx` / `colr_tx` 持续增长且比值接近 1:1。
+超过就会被内核按 tun MTU 分片，而分片按 D15 **一律丢弃、不重组**。症状是"小包通、
+大 UDP 静默丢"，除了 `frag_drop` 没有任何别的迹象。RTP/RTCP 默认远小于此值；
+编码器若可配 MTU，**配 1200 更稳**（`tools/rtp_video.py` 默认就是 1200，超限会直接
+拒绝启动而不是让你去猜）。
 
-### 性能预期（重要）
+### 3.2 方案 A：请求驱动的 RTP（`tools/rtp_video.py`）
+
+客户端先发一个订阅报文（KICK）把隧道拉起来，服务端再朝它发流——发出去的包源端口
+就是 5004，回程按内层**源**三元组反推 SID（§7.2），与上行严格对称。
+
+```powershell
+# P 上：0.0.0.0:5004，500 pps × 1200 B ≈ 4.8 Mbps，一直发到 Ctrl+C
+python tools/rtp_video.py --role server --seconds 0
+
+# C 上：订阅并连续收 5 分钟，每 5 秒打一行统计
+python tools/rtp_video.py --role client --server 172.10.9.2 --seconds 300
+```
+
+`config.json` 发布：`{ "proto": "udp", "ip": "172.10.9.2", "port": 5004 }`（已预置）。
+
+客户端每 5 秒打印一行：`已收 N 包 / X MB，pps，Mbps，丢 n（x%），乱序/重复 m，
+最长中断 t ms`，结束时给三条 PASS/FAIL。调码率用 `--pps`（服务端），调包大小用
+`--payload`（含 12 字节 RTP 头，上限 1252）。
+
+想灌真实媒体数据而不是合成码流：让 ffmpeg 把 RTP 打到**本机** 5004 端口之前那一段
+不成立（同样是推流），改用方案 B。
+
+### 3.3 方案 B：RTSP over TCP（真播放器）
+
+关键是 **`-rtsp_transport tcp`**：RTSP 的控制与数据都走那一条 TCP 连接（interleaved），
+全程由客户端发起 → 一条隧道、一条 SID。默认的 UDP 传输模式**不行**：那是服务端
+主动朝客户端的 RTP 端口发包，没有对应隧道，表现为 `no_tunnel_drop` / `sid_miss`。
+
+```powershell
+# P 上：用 MediaMTX（单个 exe，https://github.com/bluenviron/mediamtx/releases）
+.\mediamtx.exe                       # 默认 RTSP 监听 :8554
+# 另开一个窗口，把一个文件循环推进去（也可以接真摄像头 -f dshow -i video=...）
+ffmpeg -re -stream_loop -1 -i sample.mp4 -c copy -f rtsp rtsp://127.0.0.1:8554/live
+
+# config.json 发布：{ "proto": "tcp", "ip": "172.10.9.2", "port": 8554 }，重启代理
+
+# C 上
+ffplay -rtsp_transport tcp rtsp://172.10.9.2:8554/live
+# VLC：打开网络串流 → 输入 rtsp://172.10.9.2:8554/live，
+#      并在 输入/编解码器 里勾选「RTP over RTSP (TCP)」
+```
+
+MediaMTX 默认监听 `0.0.0.0`，确认一下：`netstat -ano | findstr ":8554"`。
+
+### 3.4 判据
+
+方案 A（客户端自己打印，三条都要 PASS）：
+
+- 连续接收 ≥ 285 秒（计划 300 秒的 95%）；
+- 丢包率 < 1%；
+- 最长中断 < 1000 ms。
+
+两端计数器还要满足：
+
+- `frag_drop = 0`（有值就是净载荷超了 1252，回去调 `--payload` 或编码器 MTU）；
+- `tunnel_up = 1` 且**全程不变**（D1：隧道长期有效，不刷新、不回收）；
+- `tun_rx` / `colr_tx` 持续增长且比值接近 1:1；
+- `no_tunnel_drop = 0`（中途变非零 = 隧道静默失效了，把消费端
+  `l3.tunnel_redetect_sec` 设成 30 打开重探兜底，§8.4）。
+
+方案 B：播放 5 分钟不中断、不花屏；`tunnel_up = 1`；`frag_drop` 恒为 0（TCP 路径不
+会碰到 UDP 分片）。
+
+### 3.5 性能预期（重要，先看这条再判断卡顿）
 
 数据面目前**每包一次 scapy 解析 + 构造**（`l3/provider.py`、`l3/consumer.py` 都用
 `ColorData`），是已知的逐包开销。§10.3 估计约几千 pps 到顶：**5 Mbps 视频（约 500
-pps）能扛，50 Mbps 不行**。M5「去 scapy 数据面」尚未做，本轮按用户决定推迟。
+pps）能扛，50 Mbps 不行**。M5「去 scapy 数据面」尚未做（本轮按用户决定推迟）。
 
 所以这条用例**请用低码率流**（≤ 5 Mbps）。卡顿先看是不是撞了 pps 上限，不要先怀疑
-隧道——判据是 `tun_rx` 的增速停在某个数上不动了。
+隧道——判据是 `tun_rx` 的增速停在某个数上不动了，而客户端统计里的 pps 明显低于
+服务端设定的 `--pps`。把那个数记下来，它就是 M5 的立项依据（数字只进 `perf/bench`）。
 
 ---
 
 ## 4. 用例三：MySQL 增删改查
 
-### 步骤
+### 4.1 起 MySQL（P 上）
 
-1. P 上起 MySQL，`bind-address = 0.0.0.0`，发布
-   `{ "proto": "tcp", "ip": "172.10.9.2", "port": 3306 }`。
-2. C 上 `mysql -h 172.10.9.2 -P 3306 -u <user> -p`。
-3. 建库建表 → `INSERT` / `SELECT` / `UPDATE` / `DELETE` 各若干条 →
-   再跑一次 ≥ 10 万行的 `SELECT`（把大响应也覆盖到）。
+装 MySQL 8 Community（或 MariaDB），装完确认两件事：
 
-### 判据
+```powershell
+# 1) 监听地址必须是 0.0.0.0（MySQL 8 默认如此；被安装向导改成 127.0.0.1 的话要改回来）
+netstat -ano | findstr ":3306"
+# 若是 127.0.0.1：改 my.ini 的 [mysqld] bind-address=0.0.0.0 后重启服务
+Restart-Service MySQL80
+```
 
-- 四类语句都正确返回。
-- `tunnel_up = 1`：一条长连接、多次往返**共用同一条隧道**（§5.1，隧道以 SID 为单位
-  而非以流为单位）。再开第二个 `mysql` 客户端，`tunnel_up` 仍应是 1。
-- 大 `SELECT` 不卡死。**卡死在大响应上 = MSS clamp 只做了一侧**（§6.2）：查两端的
-  `mss_clamped` 是否都 > 0，以及 `Get-NetIPInterface` 里两端 color0 的 MTU 是否都是
-  1280。
+```sql
+-- 2) 建一个从隧道那边能登录的账号。
+--    关键：提供端看到的客户端地址是**消费端的 tun 地址 10.99.1.1**，不是它的真实 IP，
+--    因为进到协议栈的是内层包。所以账号的 host 要写 '%' 或 '10.99.1.1'。
+CREATE USER 'm4'@'%' IDENTIFIED BY 'M4-test-pass';
+CREATE DATABASE m4;
+GRANT ALL PRIVILEGES ON m4.* TO 'm4'@'%';
+FLUSH PRIVILEGES;
+```
+
+### 4.2 发布
+
+`config.json` 的 `l3.services[]`（已预置）：
+
+```json
+{ "proto": "tcp", "ip": "172.10.9.2", "port": 3306, "desc": "MySQL" }
+```
+
+改完重启提供端代理与消费端。
+
+### 4.3 连接（C 上）
+
+```powershell
+mysql -h 172.10.9.2 -P 3306 -u m4 -p m4
+```
+
+没装 MySQL 客户端就用 Python：
+
+```powershell
+pip install pymysql
+python -c "import pymysql; c=pymysql.connect(host='172.10.9.2',port=3306,user='m4',password='M4-test-pass',database='m4'); print(c.get_server_info())"
+```
+
+### 4.4 跑一遍增删改查 + 一次大响应
+
+```sql
+CREATE TABLE items (id INT AUTO_INCREMENT PRIMARY KEY,
+                    name VARCHAR(64), payload VARCHAR(200));
+
+INSERT INTO items (name, payload) VALUES ('a', 'hello'), ('b', 'world');
+SELECT * FROM items;
+UPDATE items SET payload = 'updated' WHERE name = 'a';
+DELETE FROM items WHERE name = 'b';
+SELECT * FROM items;
+
+-- 大响应：造 10 万行（约 12 MB 的结果集），专门压 MSS clamp 与分片这条路径
+SET SESSION cte_max_recursion_depth = 200000;
+INSERT INTO items (name, payload)
+WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 100000)
+SELECT CONCAT('row-', n), REPEAT('x', 100) FROM seq;
+
+SELECT COUNT(*) FROM items;
+SELECT * FROM items;              -- 10 万行一次吐回来，看会不会卡死
+```
+
+再开**第二个** `mysql` 客户端连同一个库，用来验"多条连接共用一条隧道"。
+
+### 4.5 判据
+
+- 四类语句都正确返回，10 万行的 `SELECT` 能跑完、不卡死。
+- `tunnel_up = 1`：一条长连接、多次往返共用同一条隧道（§5.1，隧道以 **SID** 为单位
+  而非以流为单位）。**开第二个客户端后 `tunnel_up` 仍应是 1**，且不会再发 GET。
+- `admit_drop = 0`、`src_bind_drop = 0`、`sid_miss = 0`。
+- 大 `SELECT` 卡死 = MSS clamp 只做了一侧（§6.2）：查两端 `mss_clamped` 是否都 > 0、
+  两端 color0 的 MTU 是否都是 1280。
+
+### 4.6 常见坑
+
+- **`Host '10.99.1.1' is not allowed to connect`**：账号 host 没开（见 4.1 第 2 步）。
+  这条错误本身是好消息——说明隧道通了、TCP 也通了，是 MySQL 在做权限判断。
+- **`Authentication plugin 'caching_sha2_password' ...`**：MySQL 8 的默认认证插件对
+  非本机连接要走 RSA 换钥。`mysql` 客户端加 `--get-server-public-key`，或建账号时
+  指定 `IDENTIFIED WITH mysql_native_password BY '...'`。
+- **连上就卡在握手**：MySQL 的握手包不大，卡这里通常不是 MSS 问题，先看提供端
+  `tun_tx` 有没有涨（没涨 = 上行没到，按 §6 的表分流）。
+- **`max_allowed_packet`**：默认 64 MB，本用例够用；真要传大 BLOB 时两端都要调。
 
 ---
 
@@ -232,7 +423,7 @@ PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_acceptance.py   # 8/8
 
 > 真机跑之前还要确认一件事：**三个服务端口上不能有别的进程在听**。M1c 真机就撞过——
 > 机器上另有一个 `python -m http.server` 占着 8000，链路其实是通的，判据却挂在最后
-> 一步，看着像隧道不通。`netstat -ano | findstr ":21 :3306 :5004 :8000"` 先过一遍。
+> 一步，看着像隧道不通。`netstat -ano | findstr ":21 :3306 :5004 :8000 :8554 :50000"` 先过一遍。
 
 它覆盖的（也就是不必在真机上重新摸索的）：
 
@@ -258,6 +449,8 @@ PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_acceptance.py   # 8/8
 | `tun_rx` 涨但 `sid_miss` 同步涨 | `sid_miss` | 算出的 SID 不在表中：服务没发布，或两端服务串不一致（IP/端口/协议任一不同即完全不同的哈希） |
 | `nonunicast_drop` 一直涨 | —— | **正常现象，不用管**：本机往 tun 上发的 mDNS/SSDP/NetBIOS/IGMP。新建的 tun 上每秒好几个 |
 | 隧道建起来了但一个包不过 | 提供端 `src_bind_drop` | 消费端 `l3.tun_ip` 与提供端 `l3.peers[].tun_ip` 不一致（D14） |
+| 隧道建起来了，`colr_rx` 也不涨 | 消费端 `colr_tx` / 提供端 `colr_rx` | 上行 ACK 没到提供端：跨域时 PID/BR 那一段（GET 是 RM 转发的，上行是终端按 PID 自己发的，两条路不同）|
+| `tun_tx` 涨但 `tun_rx` 不涨 | 提供端启动日志 | 包注进去了、协议栈没回话：**源站只听 127.0.0.1**（最常见）、color0 的两个弱主机开关没开、或防火墙把 color0 的入站拦了。三者症状完全一样，逐个排 |
 | 能连上但访问别的端口也通 | 提供端 `admit_drop` | 发布了通配 `:0`，目的粒度退化到主机级（§8.3，预期行为） |
 | 小请求正常、大数据卡死 | 两端 `mss_clamped` | MSS clamp 只做了一侧，或某端 MTU 不是 1280（§6.2） |
 | 小包通、大 UDP 静默丢 | `frag_drop` | 内层 UDP 净载荷超过 1252（D15） |
@@ -275,5 +468,6 @@ PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_acceptance.py   # 8/8
    `docs/HANDOVER-l3.md` 的里程碑表。
 2. 视频流若撞到 pps 上限，把实测的 pps 数字记下来——那是 M5「去 scapy」的立项依据。
    **性能数字与压测脚本按既定规矩只进 `perf/bench` 分支，不进 `dev_tun`。**
-3. §8.5 的四个问题（上行是否需要 HMAC、`Random_Num` 长期复用、BR 的 PID 是否会老化、
-   单 SID 有无速率限制）在真机上会给出答案，答案直接决定 D1 能否成立，务必记录。
+3. §8.5 的五个问题（上行是否需要 HMAC、`Random_Num` 长期复用、BR 的 PID 是否会老化、
+   单 SID 有无速率限制、RM 的表会不会老化）在真机上会给出答案，其中前三个直接决定
+   D1 能否成立，务必记录。

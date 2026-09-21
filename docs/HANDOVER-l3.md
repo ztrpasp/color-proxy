@@ -9,22 +9,29 @@
 ## 1. 一句话现状
 
 L3 隧道模式（把完整内层 IP 包作 CoLoR DATA 载荷透传，取代端点级 L4 中继）在 `dev_tun` 上
-**代码全部写完、离线全绿**：契约 rev.4 已冻结，M0–M4 的代码与离线回归都在。
-**M1c 已在真机跑通**（2026-09-21，两半全部通过）。仍**卡在环境上**的是：真 RM/BR
-没有、第二台机器没有，所以 M2 的 CoLoR 链路与 M4 的真客户端跑不了。
+**代码全部写完、离线全绿**：契约 rev.5，M0–M4 的代码与离线回归都在。
+**M1c 已在真机跑通**（2026-09-21，两半全部通过）。
+
+**2026-09-21 晚：真 RM 环境到位（两台机器、两个 RM，跨域）**，M2 开跑并暴露了两个
+控制面问题，均已修（详见 §4②、踩坑 13/14）：提供端每 30 s 的重注册让 RM 刷
+`unable to insert into sid_table`；消费端连发 3 个注册包收不到回复，根因是
+`config-consumer.json` 的 `rm_ipv4` 写成了 `10.10.0.1`（实为 `10.10.0.5`）。
 
 | 里程碑 | 状态 | 说明 |
 |---|---|---|
 | M0 | ✅ | 类型位扩展、服务级 SID、两张服务表、配置校验、§9.3 四个 v1 遗留问题 |
 | M1a | ✅ | `tun/ipv4.py`、`tun/mss.py`、`tun/device_win.py`(Wintun 绑定) |
 | M1b | ✅ **真机** | `tools/l3_m1b_inject.py` 读回 SYN-ACK（2026-09-20） |
-| M2 | ✅ 代码 / ⬜ 真机 | 两端装配接入、按 SID 分派、tun 读线程、§2.4 第二道校验 |
+| M2 | ✅ 代码 / ◑ 真机 | 两端装配接入、按 SID 分派、tun 读线程、§2.4 第二道校验。控制面（注册/发布）已上真 RM |
 | M3 | ✅ | 首包缓冲、握手超时回收、`mtu_drop`、计数器日志、§8.4 下行重探 |
 | **M1c** | ✅ **真机** | 2026-09-21 第三跑**两半全部通过**。过程见 §4① |
 | M4 | ◑ 离线完成 / ⬜ 真机 | 离线 8 项；真客户端验收**需要两台机器** |
 | M5 | ⬜ 推迟 | 去 scapy 数据面，2026-09-21 用户决定本轮不做 |
 
-回归基线：**110 项断言 + 3 个脚本式 e2e，全绿**。
+M2 行的"真机"改为 ◑：两端都已接上真 RM，注册/发布这一段跑通了；GET→隧道→数据
+那一段还没验（见 §4②）。
+
+回归基线：**118 项断言 + 3 个脚本式 e2e，全绿**。
 
 ---
 
@@ -127,18 +134,50 @@ python tools/l3_m1c_loopback.py --role provider -v   # 只跑半 P，出问题�
 空跑已在本机通过（`--dry-run`，免管理员），所以**脚本逻辑、UDP 链路、两端数据面、
 MSS clamp 都是验证过的**，真机上新增的只有 Wintun 与内核路径。
 
-### ② M2 真机 —— 需要 RM/BR 环境
+### ② M2 真机 —— 控制面已通（2026-09-21 晚），数据面待跑
 
-把两份配置的 `l3.enabled` 改成 `true`，按 `docs/M4-acceptance.md` §1 配环境，然后
-`Test-NetConnection 172.10.9.2 -Port 8000` → `curl http://172.10.9.2:8000/hello.html`。
+环境已经有了：两台机器、两个 RM（跨域）。**注册与发布这一段真机跑过了**，代价是两个
+控制面 bug（都已修，见踩坑 13/14）：
+
+- 提供端每 30 s 重注册并重发一遍 AM=1 的 ANN → RM 每轮报 `unable to insert into
+  sid_table`。现在注册报文与每条 SID 的 AM=1 各只发一次，退出时发 AM=3 注销；
+- 消费端连发 3 个注册包无回复 → `rm_ipv4` 配错。注册失败现在会打出 RM 地址、本机
+  地址、出口网卡与下一跳 MAC，并列出逐条核对项。
+
+**接着跑数据面**：把两份配置的 `l3.enabled` 改成 `true`，按 `docs/M4-acceptance.md` §1
+配环境，然后 `Test-NetConnection 172.10.9.2 -Port 8000` →
+`curl http://172.10.9.2:8000/hello.html`。跨域拓扑下先确认 RM 同步回来的 BR 表
+（tag=6 的 `PXs`）非空，否则提供端回送时查不到下一跳。
+
+**2026-09-21 晚第一次跑：隧道建得起来，TCP 握手超时。** 已确认的一个成因：源站只听
+`127.0.0.1`（见踩坑 15），L3 的目的地址是 `172.10.9.2`，注进去没人收。源站改
+`--host 0.0.0.0` 后重跑；若仍超时，按 `docs/M4-acceptance.md` §6 的两条新行分流——
+先看提供端 `colr_rx` 涨不涨（不涨＝上行没到，查跨域 PID/BR），再看 `tun_tx` 与
+`tun_rx`（`tun_tx` 涨而 `tun_rx` 不动＝协议栈没回话：监听地址 / 弱主机开关 / 防火墙）。
 
 代码路径本身在 `tests/test_l3_assembly.py` 里跑通了（真的装配分派 + 真的 CoLoR 报文 +
 真的读线程，只有链路是假的），真机上新增的是 raw socket 收发与 RM/BR 的实际行为。
 
+> 升级到本轮代码后**第一次**启动提供端，RM 里可能还留着上一轮 30 s 刷进去的 SID，
+> 仍会报一次 `unable to insert into sid_table`。先跑 `python tools/rm_withdraw.py`
+> 把它们注销掉（或重启 RM）。
+
 ### ③ M4 真机 —— 需要第二台机器
 
-步骤、判据、故障对照表全在 `docs/M4-acceptance.md`。跑之前先跑
-`python tests/test_l3_acceptance.py`（8/8），它已经把三个用例各自特有的危险点钉死了。
+步骤、判据、故障对照表全在 `docs/M4-acceptance.md`（§2/§3/§4 已按 2026-09-21 晚的实情
+重写成可照抄的命令）。跑之前先跑 `python tests/test_l3_acceptance.py`（8/8），它已经把
+三个用例各自特有的危险点钉死了。三个源站分别是：
+
+| 用例 | 提供端起什么 | 消费端拿什么测 |
+|---|---|---|
+| 被动 FTP | `python tools/ftp_server.py --make-testfile 10`（需 `pip install pyftpdlib`） | `curl --ftp-pasv`，**主动模式一定不通**（§8.1） |
+| 视频流 | `python tools/rtp_video.py --role server --seconds 0` | `python tools/rtp_video.py --role client --server 172.10.9.2 --seconds 300`，自己打丢包率/最长中断 |
+| MySQL | 本机 MySQL，`bind-address=0.0.0.0` + 账号 host 写 `%` | `mysql -h 172.10.9.2 -P 3306` |
+
+> **视频流不能用推流**：CoLoR 是拉驱动，隧道只能由消费端的第一个上行包触发，提供端
+> 无法主动开流。`tools/rtp_video.py` 因此做成请求驱动（客户端先发 KICK）；要真播放器
+> 就走 RTSP **over TCP**（`-rtsp_transport tcp`，全程一条 TCP 隧道）。手册 §3 旧版写的
+> 「P 上 VLC 串流 RTP 到消费端」不成立，已重写。
 
 ### ④ M5 —— 用户决定本轮不做
 
@@ -189,7 +228,25 @@ MSS clamp 都是验证过的**，真机上新增的只有 Wintun 与内核路径
     并且**不打 warning**：此前它们全计进 `sid_miss`（一次 7 秒的运行 20 个），而
     §10.4 给 `sid_miss` 的含义是"路由把不该进的流量导进了 tun"——一个要改配置、
     一个什么都不用做，混在一起等于没有诊断。
-13. **`LoopbackTun.pop_written()` 是"取出并清空"**：一次可能带回好几个包（对端的 ACK
+13. **RM 不接受重复的 SID 注册**。ANN 的 `AM=1` 在 RM 侧走的是**插入**，不是"覆盖同
+    一条 SID"；第二次就报 `unable to insert into sid_table`。所以：每条 SID 只发一次
+    AM=1（`ProviderState` 里有已通告表去重），刷新用 AM=2，退出时发 AM=3 注销——
+    **不注销的话下次启动必然撞上同一条错误**，残留用 `tools/rm_withdraw.py` 清。
+    设计 §9.3 第 3 条那条"必须改成常驻注册线程"已在 rev.5 撤销。
+14. **注册"没有回复"几乎总是地址配错**。真机上消费端连发 3 个注册包、RM 那边一行日志
+    都没有，根因只是 `rm_ipv4` 写成了 `10.10.0.1`（实为 `10.10.0.5`）。这类错误在日志里
+    与"二层不通""RM 没起""防火墙拦了"长得完全一样，所以现在：注册失败会打出 RM 地址、
+    本机 `ipv4`、出口网卡与下一跳 MAC（解析不到 MAC 时额外警告——scapy 会静悄悄改用广播
+    照发不误）；收到"协议号对、但目的地址不是本机绑定地址"的 CoLoR 包提示一次（那是
+    `ipv4` 配到了另一张网卡的典型症状）；未实现的 CONTROL 子类型也各提示一次。
+15. **源站只听 `127.0.0.1` 时，v1 通而 L3 纯超时**。内容级回源是提供端本机发起的普通
+    TCP 连接（`origin_host` 写 `127.0.0.1` 就连得上），服务级是把内层包注入协议栈、
+    目的地址恒为 `l3.services[].ip`（`172.10.9.2`），没人在那个地址上听就没人收。
+    症状与"弱主机开关没开""防火墙拦 color0"一模一样：`tun_tx` 照涨、`tun_rx` 不动。
+    源站一律 `--host 0.0.0.0` 起；设计 §2.6 第 4 条原来写的 `172.10.0.2` 是 D9 时代的
+    地址，rev.5 已勘误。提供端启动时会探一次监听并告警，但装了 Proxifier/Clash 的机器
+    上探不出来（连空端口也是超时而非拒绝），仍以 `netstat -ano | findstr :8000` 为准。
+16. **`LoopbackTun.pop_written()` 是"取出并清空"**：一次可能带回好几个包（对端的 ACK
     紧跟着数据包），写测试/工具时不缓冲就会丢掉后面的。`MiniTcp` 里有 `_backlog`。
 
 ---
@@ -197,14 +254,14 @@ MSS clamp 都是验证过的**，真机上新增的只有 Wintun 与内核路径
 ## 6. 怎么跑
 
 ```bash
-# 离线回归（全绿基线：110 项断言 + 3 个脚本）
+# 离线回归（全绿基线：118 项断言 + 3 个脚本）
 PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_m0.py          # 15/15
 PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_dataplane.py   # 20/20
-PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_assembly.py    # 12/12  ← 装配层
+PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_assembly.py    # 13/13  ← 装配层
 PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_acceptance.py  #  8/8   ← M4 离线
 PYTHONDONTWRITEBYTECODE=1 python tests/test_tun_ipv4_mss.py   # 14/14
 PYTHONDONTWRITEBYTECODE=1 python tests/test_tun_device.py     #  7/7
-PYTHONDONTWRITEBYTECODE=1 python tests/test_registration.py   #  8/8
+PYTHONDONTWRITEBYTECODE=1 python tests/test_registration.py   # 15/15
 PYTHONDONTWRITEBYTECODE=1 python tests/test_protocol.py       # 10/10
 PYTHONDONTWRITEBYTECODE=1 python tests/test_consumer.py       #  8/8
 PYTHONDONTWRITEBYTECODE=1 python tests/test_provider.py       #  4/4
