@@ -41,8 +41,8 @@ class Consumer:
             ConsumerL3Service(self.state, self.sender, tun=tun)
             if config.l3.enabled else None
         )
-        # 常驻注册线程（§9.3 第 3 条）。消费端不发布服务，故无 on_registered 回调；
-        # 周期性重注册的收益在于 RM 重启后能重新拿到域内代理表。
+        # 注册线程。消费端不发布服务，故无回调；默认注册一次即停
+        # （周期性重注册连带的重复 ANN 会被 RM 拒，见 registration 模块说明）。
         self.keeper = registration.RegistrationKeeper(self.state, self.sender)
 
     def start(self) -> None:
@@ -50,7 +50,8 @@ class Consumer:
         self.receiver.start()
         self.keeper.start()
         if not self.keeper.wait_first():
-            raise RuntimeError("无法向 RM 注册，消费端启动失败")
+            raise RuntimeError(registration.failure_message(
+                "消费端", self.state, self.keeper, self.sender))
         self._preload_static_sids()
         sid_table.request_sid_list(self.state, self.sender)
         time.sleep(SID_LIST_COLLECT_WINDOW)

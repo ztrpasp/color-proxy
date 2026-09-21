@@ -107,31 +107,51 @@ def parse_proxy_table_strict(payload: bytes) -> tuple[list[tuple[int, str]], lis
     return entries[0], entries[1]
 
 
-def is_proxy_notify(payload: bytes) -> bool:
-    """判断是否为合法的新代理通知报文（Subtype=8 且校验和正确）。"""
+def trim_to_declared_length(payload: bytes) -> bytes:
+    """按报文自述长度（``Header_Length + Data_Length``）截去尾部多余字节。
+
+    校验和覆盖整个 CONTROL 报文，多一个字节就算不过。而收到的字节**可能比报文长**：
+    短报文（一个代理、没有 BR 的 tag=6 就只有 30 字节）会被网卡补到以太网最小帧，
+    scapy 把那几个填充字节一并算进 ``bytes(pkt.payload)``。参考实现
+    color-agent-plus 用的是"长度对不上就整包丢弃"，这里选择截齐再校验——
+    丢弃意味着注册永远不成功，而症状只是"RM 不回复"，极难定位。
+
+    自述长度大于实际收到的字节数时原样返回：那是真的截断，应当让校验和去拦。
+    """
+    if len(payload) < CONTROL_HEADER_LENGTH:
+        return payload
+    declared = payload[4] + int.from_bytes(payload[6:8], "little")
+    if CONTROL_HEADER_LENGTH <= declared < len(payload):
+        return payload[:declared]
+    return payload
+
+
+def checksum_ok(payload: bytes) -> bool:
+    """CONTROL 报文的校验和是否正确（先按自述长度截齐）。"""
+    return calculate_checksum(trim_to_declared_length(payload)) == 0
+
+
+def _is_control_subtype(payload: bytes, subtype: int) -> bool:
     if len(payload) < CONTROL_HEADER_LENGTH:
         return False
-    if payload[0] != CONTROL_FIRST_BYTE or payload[5] != ControlSubtype.PROXY_NOTIFY:
+    if payload[0] != CONTROL_FIRST_BYTE or payload[5] != subtype:
         return False
-    return calculate_checksum(payload) == 0
+    return checksum_ok(payload)
+
+
+def is_proxy_notify(payload: bytes) -> bool:
+    """判断是否为合法的新代理通知报文（Subtype=8 且校验和正确）。"""
+    return _is_control_subtype(payload, ControlSubtype.PROXY_NOTIFY)
 
 
 def is_register_reply(payload: bytes) -> bool:
     """判断是否为合法的 RM 同步报文（Subtype=6 且校验和正确）。"""
-    if len(payload) < CONTROL_HEADER_LENGTH:
-        return False
-    if payload[0] != CONTROL_FIRST_BYTE or payload[5] != ControlSubtype.PROXY_REGISTER_REPLY:
-        return False
-    return calculate_checksum(payload) == 0
+    return _is_control_subtype(payload, ControlSubtype.PROXY_REGISTER_REPLY)
 
 
 def is_sid_list(payload: bytes) -> bool:
     """判断是否为合法的 RM 本域 SID 列表报文（Subtype=40 且校验和正确）。"""
-    if len(payload) < CONTROL_HEADER_LENGTH:
-        return False
-    if payload[0] != CONTROL_FIRST_BYTE or payload[5] != ControlSubtype.SID_LIST_UPDATE:
-        return False
-    return calculate_checksum(payload) == 0
+    return _is_control_subtype(payload, ControlSubtype.SID_LIST_UPDATE)
 
 
 def parse_sid_list(payload: bytes) -> list[str]:

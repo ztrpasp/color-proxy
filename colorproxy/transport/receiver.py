@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import logging
 import socket
 import threading
 from typing import Callable
@@ -13,6 +14,8 @@ from typing import Callable
 from scapy.layers.inet import IP
 
 from ..protocol.constants import IP_PROTO_COLOR
+
+logger = logging.getLogger(__name__)
 
 #: 单次接收缓冲区大小（足以容纳一个以太网 MTU 之内的 IP 包）
 _RECV_BUFFER = 65535
@@ -27,6 +30,11 @@ class ColorReceiver(threading.Thread):
         self._on_payload = on_payload
         self._sock: socket.socket | None = None
         self._running = False
+        #: 收到并交给上层的 CoLoR 报文数
+        self.delivered = 0
+        #: 协议号对但目的地址不是本进程绑定地址、因而被丢弃的报文数
+        self.other_dst = 0
+        self._warned_other_dst = False
 
     def start(self) -> None:
         self._sock = self._open_socket()
@@ -51,11 +59,33 @@ class ColorReceiver(threading.Thread):
                     raise
                 break
             packet = IP(raw)
-            if packet.proto != IP_PROTO_COLOR or packet.dst != self._bind_ip:
+            if packet.proto != IP_PROTO_COLOR:
+                continue
+            if packet.dst != self._bind_ip:
+                self._note_other_dst(packet.dst)
                 continue
             payload = bytes(packet.payload)
             if payload:
+                self.delivered += 1
                 self._on_payload(payload)
+
+    def _note_other_dst(self, dst: str) -> None:
+        """记下"协议号对、地址不对"的报文，并提示一次。
+
+        这是"对端明明回了、我这边却什么都没收到"的头号成因：``ipv4`` 配成了本机
+        另一张网卡的地址时，绑定和过滤都用那个地址，真正到达的回复被这里悄悄丢掉。
+        混杂模式下也可能是邻居的 CoLoR 流量，故只提示一次、不当错误。
+        """
+        self.other_dst += 1
+        if self._warned_other_dst:
+            return
+        self._warned_other_dst = True
+        logger.warning(
+            "收到发往 %s 的 CoLoR 报文，但本进程绑定的是 %s，已丢弃（同类只提示一次）。"
+            "若 %s 也是本机地址，说明配置里的 ipv4 指向了另一张网卡——"
+            "RM 的回复会一直被丢在这里",
+            dst, self._bind_ip, dst,
+        )
 
     def stop(self) -> None:
         self._running = False

@@ -34,11 +34,13 @@ class Provider:
             ProviderL3Service(self.state, self.sender, tun=tun)
             if config.l3.enabled else None
         )
-        # 常驻注册线程：每轮重注册后重发 ANN，使 RM 重启后自动恢复（§9.3 第 3 条）。
-        # publish_services 幂等（ANN 以 AM=1 覆盖同一条 SID），可安全重复调用。
+        # 注册线程：默认只注册一次并发布一次服务。2026-09-21 真机修正——重复的
+        # AM=1 会被 RM 拒（unable to insert into sid_table），故"每轮重发 ANN"那条
+        # 只保留在开启周期刷新时的 on_refresh 上，且改用 AM=2（见 registration 模块说明）。
         self.keeper = registration.RegistrationKeeper(
             self.state, self.sender,
             on_registered=lambda: publish.publish_services(self.state, self.sender),
+            on_refresh=lambda: publish.refresh_services(self.state, self.sender),
         )
 
     def start(self) -> None:
@@ -52,7 +54,8 @@ class Provider:
         self.receiver.start()
         self.keeper.start()
         if not self.keeper.wait_first():
-            raise RuntimeError("无法向 RM 注册，服务端启动失败")
+            raise RuntimeError(registration.failure_message(
+                "服务端", self.state, self.keeper, self.sender))
         logger.info(
             "服务端就绪：Web 服务 %d 条，L3 服务 %d 条（L3 隧道模式%s）",
             len(self.state.config.services), self.state.l3_service_count(),
@@ -60,7 +63,15 @@ class Provider:
         )
 
     def stop(self) -> None:
+        # 先停注册线程再注销：否则周期刷新可能在注销之后又发一遍 ANN。
+        # 注销（AM=3）是为了下次启动能干净地再注册——RM 里留着上一轮的 SID 时，
+        # 新一轮的 AM=1 会报 unable to insert into sid_table。
         self.keeper.stop()
+        if self.state.registered.is_set():
+            try:
+                publish.withdraw_services(self.state, self.sender)
+            except Exception:  # noqa: BLE001 退出路径上没什么可补救的
+                logger.exception("向 RM 注销服务失败（已忽略）")
         self.receiver.stop()
         if self.l3 is not None:
             self.l3.stop()

@@ -1,7 +1,7 @@
 {
   "nid": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
   "ipv4": "10.10.0.2",
-  "rm_ipv4": "10.10.0.1",
+  "rm_ipv4": "10.10.0.5",
   "proxy_port": 8910,
   "sids": [
     {

@@ -37,6 +37,9 @@ class ProviderState:
         self._pxs: dict[int, str] = {}                  # px -> ip
         self._web_services: dict[str, ServiceConfig] = {}  # sid -> 服务
         self._pending: dict[tuple[str, int], PendingTx] = {}  # (sid, cus_nid) -> 事务
+        #: 已向 RM 发出过 ANN 的服务：sid -> L_sid。两种粒度共用一张表——去重与
+        #: 退出注销只关心"这条 SID 通告过没有"，与它是内容级还是服务级无关。
+        self._announced: dict[str, bytes] = {}
 
         # -- L3 隧道模式（v2）。两张表与 v1 的 _web_services 并列，模式分派靠
         # "SID 落在哪张表里"判定，不靠 load[0]（docs/design-l3-v2.md §4.1，D13）。
@@ -71,6 +74,29 @@ class ProviderState:
                 return self._peer_proxys.get(consumer_nid)
             px = pids[-1] >> 16
             return self._pxs.get(px)
+
+    # -- 已通告给 RM 的 SID（ANN 去重 + 退出注销）-----------------------
+
+    def mark_announced(self, sid: str, lsid: bytes) -> bool:
+        """登记一条"已发出 ANN"的 SID。返回 False 表示此前已通告过。
+
+        调用方据此跳过重发：真机 RM 对同一条 SID 的第二次 AM=1 会报
+        ``unable to insert into sid_table``（2026-09-21）。
+        """
+        with self._lock:
+            if sid in self._announced:
+                return False
+            self._announced[sid] = lsid
+            return True
+
+    def announced_services(self) -> list[tuple[str, bytes]]:
+        """已通告的 ``[(sid, lsid), ...]`` 快照（刷新 AM=2 / 注销 AM=3 用）。"""
+        with self._lock:
+            return list(self._announced.items())
+
+    def clear_announced(self) -> None:
+        with self._lock:
+            self._announced.clear()
 
     # -- 已发布 Web 服务 -----------------------------------------------
 
