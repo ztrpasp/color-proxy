@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import logging
+import socket
 import sys
 import threading
 import time
@@ -35,6 +36,27 @@ COUNTER_LOG_SEC = 5.0
 EXPIRE_SCAN_MAX_SEC = 1.0
 #: tun 读线程每次 read 的等待上限（秒）。只影响 stop() 的响应速度，不影响吞吐。
 TUN_READ_POLL_SEC = 0.5
+
+
+def tcp_listener_present(ip: str, port: int, timeout_sec: float = 0.3) -> bool:
+    """``ip:port`` 上有没有进程在监听（一次短超时的 TCP connect）。
+
+    连上就立刻关闭，不发任何字节——HTTP/FTP/MySQL 这类服务对一个空连接都不会留下
+    请求日志。只有明确的拒绝连接(ECONNREFUSED) 才判为"没人听"；超时或其他错误一律
+    判为"不确定"并按有人听处理：装了 Proxifier/Clash 一类会劫持出站连接的机器上，
+    连空端口也是超时而不是拒绝，据此报警只会喊狼来了。
+    """
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.settimeout(timeout_sec)
+    try:
+        probe.connect((ip, port))
+        return True
+    except ConnectionRefusedError:
+        return False
+    except OSError:
+        return True
+    finally:
+        probe.close()
 
 
 class TunPump(threading.Thread):
@@ -206,6 +228,7 @@ class ProviderL3Service(_L3ServiceBase):
     def _build_dataplane(self) -> Callable[[bytes], object]:
         self.dataplane = L3Provider(self.state, self.tun, self.sender, self.counters)
         self._check_host_model()
+        self._check_services_listening()
         if self.config.tunnel_refresh_sec > 0:
             # §8.4 的"重发 GET 刷新 PID"是**消费端**动作（只有消费端会发 GET）。
             # 这个配置项落在提供端段里是设计文档的笔误，实现的是消费端的
@@ -219,6 +242,31 @@ class ProviderL3Service(_L3ServiceBase):
 
     def _periodic_tasks(self) -> list[Callable[[], None]]:
         return [_CounterLog(self.counters, "L3/提供端")]
+
+    def _check_services_listening(self) -> None:
+        """发布的 TCP 服务地址上到底有没有人在监听（§2.6 第 4 条）。
+
+        只听 `127.0.0.1` 的源站是这条链路最常见的哑火点，而且**从计数器上看不出来**：
+        隧道建得起来、`tun_tx` 照涨，包注入协议栈后没人收。运气好回一个 RST，客户端
+        报"拒绝连接"；防火墙把 RST 吃掉的话就是纯超时，与丢包完全一样。
+
+        判据用一次短超时的 connect，不用"试着 bind"——Windows 上绑 `0.0.0.0:8000`
+        **不妨碍**别人再绑 `172.10.9.2:8000`，bind 得上根本不能说明没人监听。
+        """
+        if self._tun is not None and not self._owns_tun:
+            return  # 注入的 tun（离线测试），不去碰真网络
+        for service in self.config.services:
+            if service.proto != "tcp" or service.is_wildcard_port:
+                continue  # UDP 无从探测；通配端口没有确定的探测目标
+            if tcp_listener_present(service.ip, service.port):
+                logger.info("服务监听核对：%s 有进程在听", service.canonical)
+                continue
+            logger.warning(
+                "没有进程在监听 %s。L3 隧道仍会建起来、包也会注入 %s，但协议栈那边"
+                "没人收：客户端看到的是超时或「拒绝连接」。源站要 bind 0.0.0.0（或 %s），"
+                "只听 127.0.0.1 不行（§2.6 第 4 条）。源站若是稍后才起的，忽略本行",
+                service.canonical, self.config.tun_name, service.ip,
+            )
 
     def _check_host_model(self) -> None:
         """§2.3 / §2.5：检查弱主机模型开关。**两种方案要检查的网卡数量不同。**

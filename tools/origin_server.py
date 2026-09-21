@@ -256,6 +256,13 @@ def main() -> None:
 
     server = ThreadingHTTPServer((args.host, args.port), _OriginHandler)
     print(f"源站已启动：http://{args.host}:{args.port}")
+    if args.host in ("127.0.0.1", "localhost", "::1"):
+        # 只听回环时，L3（服务级）那条路一定哑火：内层包的目的是 color0 的地址
+        # 172.10.9.2，协议栈收下后找不到监听者，客户端看到的是超时或拒绝连接。
+        # v1（内容级）不受影响——回源是本机发起的普通 TCP，把 origin_host 写成
+        # 127.0.0.1 就能连上，这也是两条路径表现不一致的原因。
+        print("  [!] 仅监听回环：经 L3 服务级访问（如 tcp://172.10.9.2:8000）收不到包，"
+              "要测 L3 请加 --host 0.0.0.0")
     print("  页面： /hello.html  /showcase.html  /items.html（CRUD 交互控制台）")
     print("  接口： /ping  /api/items（GET/POST/PUT/DELETE，id 走 ?id=N）")
     print("按 Ctrl+C 退出")

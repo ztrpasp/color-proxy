@@ -348,6 +348,26 @@ def test_l3_disabled_leaves_assembly_untouched() -> None:
     assert Consumer(consumer_config).l3 is None
 
 
+def test_tcp_listener_probe_sees_a_real_listener() -> None:
+    """探测器对"确实有人在听"必须为真——它是"源站只听 127.0.0.1"那条告警的判据。
+
+    只断言这一半：空端口在装了会劫持出站连接的代理（Proxifier/Clash 等）的机器上
+    是**超时**而不是拒绝连接，那种环境里探测器按"不确定"处理，断不得。
+    """
+    import socket
+
+    from colorproxy.l3.service import tcp_listener_present
+
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    port = server.getsockname()[1]
+    try:
+        assert tcp_listener_present("127.0.0.1", port) is True
+    finally:
+        server.close()
+
+
 def _run_all() -> int:
     funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

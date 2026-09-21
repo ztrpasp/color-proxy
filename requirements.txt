@@ -1,5 +1,9 @@
 # 运行依赖
 scapy>=2.5.0
 
+# M4 用例一的 FTP 源站（tools/ftp_server.py）需要：
+#   pip install pyftpdlib
+# 用例二的视频流 tools/rtp_video.py 不需要额外依赖；用例三需要本机装 MySQL。
+
 # Windows 还需单独安装 Npcap（https://npcap.com/），供 scapy 收发链路层报文。
 # 本服务端不依赖 cryptography / PyQt5 / opencv（已去除 ESS 加密与 GUI）。
