@@ -35,8 +35,10 @@ from colorproxy.protocol.constants import (
     WEB_MSG_TYPE_MASK,
     WebMsgType,
 )
-from colorproxy.protocol.packets import ColorData
-from colorproxy.protocol.sid import sid_hex_from_service
+from colorproxy.consumer.messages import build_get
+from colorproxy.l3.tables import FLOW_ADMITTED, FLOW_NEW, FLOW_PENDING, UdpFlowTable
+from colorproxy.protocol.packets import ColorData, ColorGet
+from colorproxy.protocol.sid import sid_hex_from_packet, sid_hex_from_service
 from colorproxy.state import ProviderState
 from colorproxy.tun.device import LoopbackTun
 
@@ -106,12 +108,18 @@ class _Link:
         self.consumer: L3Consumer | None = None
         self.dropped: list[tuple[str, bytes]] = []   # 没人认领的报文
         self.log: list[tuple[str, int]] = []         # (目的IP, 首字节)
+        #: 模拟 RM 的 ACL：GET 的 SID 在这里面就被静默丢弃，提供端收不到
+        self.deny_sids: set[str] = set()
 
     def send(self, dst_ip: str, packet) -> None:
         payload = bytes(packet)
         self.log.append((dst_ip, payload[0]))
         # 消费端把 GET 发给 RM，由 RM/BR 转发到提供端；这里直接交给提供端
         if payload[0] == GET_FIRST_BYTE:
+            get = ColorGet(payload)
+            if sid_hex_from_packet(bytes(get.NSID), bytes(get.LSID)) in self.deny_sids:
+                self.dropped.append((dst_ip, payload))
+                return
             if self.provider is not None and self.provider.handle_get(payload):
                 return
         elif payload[0] == DATA_FIRST_BYTE:
@@ -154,6 +162,28 @@ def _origin_synack(sport: int = SERVICE_PORT, dport: int = 51000, mss_value: int
         IP(src=PROVIDER_IP, dst=CONSUMER_TUN)
         / TCP(sport=sport, dport=dport, flags="SA", options=[("MSS", mss_value)])
     )))
+
+
+def _client_ack(sport: int = 51000, dport: int = SERVICE_PORT) -> bytes:
+    """已建立连接上的普通数据包（ACK，带一点负载）。"""
+    return bytes(IP(bytes(
+        IP(src=CONSUMER_TUN, dst=PROVIDER_IP)
+        / TCP(sport=sport, dport=dport, flags="PA") / Raw(b"query")
+    )))
+
+
+def _client_udp(sport: int = 40000, data: bytes = b"kick", dport: int = 5004) -> bytes:
+    return bytes(IP(bytes(
+        IP(src=CONSUMER_TUN, dst=PROVIDER_IP) / UDP(sport=sport, dport=dport) / Raw(data)
+    )))
+
+
+def _gets(link: "_Link") -> int:
+    return len([entry for entry in link.log if entry[1] == GET_FIRST_BYTE])
+
+
+def _injected_sports(provider: L3Provider) -> list[int]:
+    return [IP(p).sport for p in provider.tun.pop_written()]
 
 
 def _sid(proto: str = "tcp", port: int = SERVICE_PORT) -> str:
@@ -514,6 +544,173 @@ def test_subnet_broadcast_noise_is_counted_separately() -> None:
     )))
     assert provider.on_tun_packet(limited) is False
     assert provider.counters.get("nonunicast_drop") == 1
+
+
+# ------------------------------------------------- D19 新连接准入（RM 的 ACL）
+
+def test_each_new_tcp_connection_sends_get() -> None:
+    """隧道已在时，新连接的 SYN 要再过一次 GET；已有连接的包直接走隧道。"""
+    link, provider, consumer = _wire()
+    assert consumer.on_tun_packet(_client_syn(sport=51000))
+    provider.tun.pop_written()
+    link.log.clear()
+
+    assert consumer.on_tun_packet(_client_ack(sport=51000))
+    assert _gets(link) == 0, "已有连接的包不该发 GET"
+    assert _injected_sports(provider) == [51000]
+
+    assert consumer.on_tun_packet(_client_syn(sport=51001))
+    assert _gets(link) == 1, "新连接应先发 GET，让 RM 的 ACL 有机会拦"
+    assert _injected_sports(provider) == [51001], "GET 回复后新连接的 SYN 应已冲刷"
+    assert consumer.counters.get("admit_get") == 1
+    assert consumer.counters.get("tunnel_up") == 1, "准入只刷新隧道，不新建"
+    assert link.dropped == []
+
+
+def test_acl_denied_blocks_new_connection_but_keeps_existing() -> None:
+    """RM 拒绝后：新连接被拦在消费端、计 admit_timeout；已有连接照常；撤销后恢复。"""
+    link, provider, consumer = _wire(tunnel_timeout_sec=0.05)
+    assert consumer.on_tun_packet(_client_syn(sport=51000))
+    provider.tun.pop_written()
+
+    link.deny_sids.add(_sid())   # RM 上设了 ACL：此后这个 SID 的 GET 都被丢
+    link.log.clear()
+    assert consumer.on_tun_packet(_client_syn(sport=51001))
+    assert _gets(link) == 1
+    assert provider.tun.pop_written() == [], "GET 没有回复之前，新连接的 SYN 不得放出去"
+
+    assert consumer.on_tun_packet(_client_ack(sport=51000))
+    assert _injected_sports(provider) == [51000], "等 GET 期间已有连接照常走旧隧道"
+
+    time.sleep(0.08)
+    consumer.expire_handshakes()
+    assert consumer.counters.get("admit_timeout") == 1
+    assert consumer.counters.get("firstpkt_dropped") == 1
+    assert consumer.tunnels.get(_sid()) is not None, "旧隧道要留给已有连接"
+    assert not consumer.tunnels.is_pending(_sid())
+
+    assert consumer.on_tun_packet(_client_ack(sport=51000))
+    assert _injected_sports(provider) == [51000], "ACL 拒绝后已有连接仍然可用"
+
+    link.deny_sids.clear()       # 撤销 ACL：客户端重传 SYN 即可连上
+    assert consumer.on_tun_packet(_client_syn(sport=51001))
+    assert _injected_sports(provider) == [51001]
+
+
+def test_new_connections_during_pending_admission_share_one_get() -> None:
+    """准入 GET 在途时来的新连接合并到同一个 GET，回复后按序冲刷。"""
+    link, provider, consumer = _wire()
+    assert consumer.on_tun_packet(_client_syn(sport=51000))
+    provider.tun.pop_written()
+
+    link.provider = None         # 提供端暂时不回
+    link.log.clear()
+    assert consumer.on_tun_packet(_client_syn(sport=51001))
+    assert consumer.on_tun_packet(_client_syn(sport=51002))
+    assert _gets(link) == 1, "同一条 SID 同时只该有一个 GET 在途"
+
+    link.provider = provider
+    assert provider.handle_get(bytes(build_get(_sid(), CONSUMER_NID, 9)))
+    assert _injected_sports(provider) == [51001, 51002]
+
+
+def test_per_connection_get_can_be_turned_off() -> None:
+    """get_per_connection=false 退回 D1 原行为：每条 SID 只发一次 GET。"""
+    link, provider, consumer = _wire(get_per_connection=False)
+    assert consumer.on_tun_packet(_client_syn(sport=51000))
+    assert consumer.on_tun_packet(_client_syn(sport=51001))
+    assert _gets(link) == 1
+    assert _injected_sports(provider) == [51000, 51001]
+    assert consumer.counters.get("admit_get") == 0
+
+
+def test_udp_new_flow_sends_get_until_admitted_then_reuses() -> None:
+    """UDP：新四元组发 GET，同一流后续包直接走；换源端口算新流；空闲超时后再算新流。"""
+    link, provider, consumer = _wire(provider_services=(("udp", 5004),),
+                                     udp_flow_idle_sec=0.05)
+    assert consumer.on_tun_packet(_client_udp(40000))
+    assert consumer.on_tun_packet(_client_udp(40000))
+    assert _gets(link) == 1, "首建隧道时登记的流，隧道建好后不该再发 GET"
+
+    assert consumer.on_tun_packet(_client_udp(40001))
+    assert _gets(link) == 2, "换了源端口就是新流"
+    assert _injected_sports(provider) == [40000, 40000, 40001]
+
+    time.sleep(0.08)
+    assert consumer.on_tun_packet(_client_udp(40000))
+    assert _gets(link) == 3, "上行空闲超过 udp_flow_idle_sec 后算新流"
+    assert link.dropped == []
+
+
+def test_udp_packets_of_pending_flow_are_queued_not_bypassed() -> None:
+    """等 GET 回复期间，同一条新 UDP 流的后续包也要入队，不能从旧隧道抢跑。"""
+    link, provider, consumer = _wire(provider_services=(("udp", 5004),))
+    assert consumer.on_tun_packet(_client_udp(40000))
+    provider.tun.pop_written()
+
+    link.provider = None
+    link.log.clear()
+    assert consumer.on_tun_packet(_client_udp(40001, b"a"))
+    assert consumer.on_tun_packet(_client_udp(40001, b"b"))
+    assert _gets(link) == 1
+    assert [e for e in link.log if e[1] == DATA_FIRST_BYTE] == [], "包不得绕过准入发出去"
+
+    link.provider = provider
+    assert provider.handle_get(bytes(build_get(_sid("udp", 5004), CONSUMER_NID, 9)))
+    assert [bytes(IP(p)[UDP].payload) for p in provider.tun.pop_written()] == [b"a", b"b"]
+
+    link.log.clear()
+    assert consumer.on_tun_packet(_client_udp(40001, b"c"))
+    assert _gets(link) == 0, "放行之后同一流不再发 GET"
+
+
+def test_udp_flow_retries_get_after_admission_timeout() -> None:
+    """UDP 准入超时后，同一流的下一个包要重新发 GET，而不是永远卡在"待准入"。"""
+    link, provider, consumer = _wire(provider_services=(("udp", 5004),),
+                                     tunnel_timeout_sec=0.05)
+    assert consumer.on_tun_packet(_client_udp(40000))
+    provider.tun.pop_written()
+
+    link.deny_sids.add(_sid("udp", 5004))
+    assert consumer.on_tun_packet(_client_udp(40001))
+    time.sleep(0.08)
+    consumer.expire_handshakes()
+    assert consumer.counters.get("admit_timeout") == 1
+
+    link.deny_sids.clear()
+    link.log.clear()
+    assert consumer.on_tun_packet(_client_udp(40001))
+    assert _gets(link) == 1
+    assert _injected_sports(provider) == [40001]
+
+
+def test_udp_flow_table_lifecycle() -> None:
+    """UdpFlowTable 的状态转换、空闲、清理与容量上限（显式时间，不 sleep）。"""
+    src, dst = bytes([10, 99, 1, 1]), bytes([172, 10, 0, 2])
+    k1, k2, k3, k4 = ((src, port, dst, 5004) for port in (40001, 40002, 40003, 40004))
+
+    table = UdpFlowTable(idle_sec=10, capacity=3)
+    assert table.classify(k1, "s", now=0) == FLOW_NEW
+    assert table.classify(k1, "s", now=1) == FLOW_PENDING
+    table.admit_sid("s", now=2)
+    assert table.classify(k1, "s", now=5) == FLOW_ADMITTED
+    assert table.classify(k1, "s", now=14) == FLOW_ADMITTED, "每个上行包都刷新空闲计时"
+    assert table.classify(k1, "s", now=25) == FLOW_NEW, "空闲 11 s > 10 s，算新流"
+
+    table.forget_pending("s")
+    assert len(table) == 0, "GET 超时后待准入的流要删掉"
+
+    table.classify(k1, "s", now=0)
+    table.classify(k2, "t", now=0)
+    table.admit_sid("s", now=0)
+    assert table.classify(k2, "t", now=1) == FLOW_PENDING, "admit_sid 只放行自己 SID 的流"
+    table.prune(now=11)
+    assert len(table) == 0, "空闲超时的流（含孤儿待准入流）都该被清掉"
+
+    for key in (k1, k2, k3):
+        table.classify(key, "s", now=0)
+    assert table.classify(k4, "s", now=1) == FLOW_NEW
+    assert len(table) == 1, "满了且清不掉时整体清空，只留新来的"
 
 
 def _run_all() -> int:

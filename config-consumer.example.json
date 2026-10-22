@@ -29,6 +29,8 @@
     "firstpkt_queue_pkts": 4,
     "firstpkt_queue_bytes": 8192,
     "tunnel_redetect_sec": 0,
+    "get_per_connection": true,
+    "udp_flow_idle_sec": 60,
     "debug_tunnel_icmp": false
   }
 }

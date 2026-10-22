@@ -24,6 +24,7 @@ L3_MSS_HEADROOM = 40
 L3_DEFAULT_TUNNEL_TIMEOUT_SEC = 5.0
 L3_DEFAULT_QUEUE_PKTS = 4
 L3_DEFAULT_QUEUE_BYTES = 8192
+L3_DEFAULT_UDP_FLOW_IDLE_SEC = 60.0
 
 
 @dataclass(frozen=True)
@@ -71,6 +72,11 @@ class ConsumerL3Config:
     firstpkt_queue_pkts: int = L3_DEFAULT_QUEUE_PKTS
     firstpkt_queue_bytes: int = L3_DEFAULT_QUEUE_BYTES
     tunnel_redetect_sec: float = 0.0
+    #: 每条新连接（TCP SYN / 新 UDP 流）先发一次 GET，让 RM 的 ACL 按连接生效（D19）。
+    #: false 退回 D1 的原行为：每条 SID 只在第一个包时发 GET，此后 ACL 改动对它无效。
+    get_per_connection: bool = True
+    #: UDP 四元组上行空闲多久算新流（D19；UDP 没有 SYN，只能这样判断）
+    udp_flow_idle_sec: float = L3_DEFAULT_UDP_FLOW_IDLE_SEC
     #: 联调开关：放行 ICMP 进隧道，用 ping 做最小连通性判据（§8.2）。跑通后应关掉。
     debug_tunnel_icmp: bool = False
     #: SID 表未就绪时的降级路径（§9.2）。为空则完全依赖 RM 下发的表。
@@ -190,6 +196,13 @@ def _load_l3(data: dict | None, rm_ipv4: str) -> ConsumerL3Config:
             desc=str(entry.get("desc", "")),
         ))
 
+    udp_flow_idle_sec = float(data.get("udp_flow_idle_sec", L3_DEFAULT_UDP_FLOW_IDLE_SEC))
+    if udp_flow_idle_sec <= 0:
+        raise ValueError(
+            f"l3.udp_flow_idle_sec({udp_flow_idle_sec}) 必须大于 0；"
+            "想关掉按连接发 GET 请改 l3.get_per_connection=false"
+        )
+
     if enabled:
         if not tun_ip:
             raise ValueError("l3.enabled 时必须配 l3.tun_ip（内层包的源地址就是它）")
@@ -210,6 +223,8 @@ def _load_l3(data: dict | None, rm_ipv4: str) -> ConsumerL3Config:
         firstpkt_queue_pkts=int(data.get("firstpkt_queue_pkts", L3_DEFAULT_QUEUE_PKTS)),
         firstpkt_queue_bytes=int(data.get("firstpkt_queue_bytes", L3_DEFAULT_QUEUE_BYTES)),
         tunnel_redetect_sec=float(data.get("tunnel_redetect_sec", 0.0)),
+        get_per_connection=bool(data.get("get_per_connection", True)),
+        udp_flow_idle_sec=udp_flow_idle_sec,
         debug_tunnel_icmp=bool(data.get("debug_tunnel_icmp", False)),
         static_services=tuple(static_services),
     )

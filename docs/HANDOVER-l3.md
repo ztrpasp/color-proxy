@@ -1,8 +1,8 @@
 # 交接文档 —— L3 隧道模式（分支 `dev_tun`）
 
 > 目的：让新会话直接接着做，不必重建上下文。
-> 开场读序：**本文 → `docs/design-l3-v2.md`（契约，rev.4）→ `docs/M4-acceptance.md`**。
-> v1 的背景见 `docs/HANDOVER.md`。截至 2026-09-21。
+> 开场读序：**本文 → `docs/design-l3-v2.md`（契约，rev.6）→ `docs/M4-acceptance.md`**。
+> v1 的背景见 `docs/HANDOVER.md`。截至 2026-10-23。
 
 ---
 
@@ -31,7 +31,15 @@ L3 隧道模式（把完整内层 IP 包作 CoLoR DATA 载荷透传，取代端�
 M2 行的"真机"改为 ◑：两端都已接上真 RM，注册/发布这一段跑通了；GET→隧道→数据
 那一段还没验（见 §4②）。
 
-回归基线：**118 项断言 + 3 个脚本式 e2e，全绿**。
+**2026-10-23：适配 RM 新增的 ACL（设计 rev.6，D19「新连接准入」）。** RM 只对 GET 做
+ACL，而 L3 每条 SID 只发一次 GET，之后的连接都复用缓存的 PID，ACL 改了也管不到。
+现在消费端对每条新连接（TCP `SYN` 无 `ACK`；UDP 按四元组 + 上行空闲 60 s）先为所属 SID
+重发 GET，回了隧道 DATA 才放行；已有连接继续走旧隧道。**只改了消费端**（用户决定：信任
+消费端软件，提供端不做校验），开关 `l3.get_per_connection`（默认开）。边界与代价在设计
+§8.6，真机用例在 M4 手册 §4b（需要带 ACL 的 RM）。实现复用了 §8.4 重探的「保留旧隧道、
+回包原子替换」：`ConsumerTunnelTable.begin_redetect` 已改名 `begin_refresh`，两处共用。
+
+回归基线：**127 项断言 + 3 个脚本式 e2e，全绿**。
 
 ---
 
@@ -254,12 +262,12 @@ MSS clamp 都是验证过的**，真机上新增的只有 Wintun 与内核路径
 ## 6. 怎么跑
 
 ```bash
-# 离线回归（全绿基线：118 项断言 + 3 个脚本）
+# 离线回归（全绿基线：127 项断言 + 3 个脚本）
 PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_m0.py          # 15/15
-PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_dataplane.py   # 20/20
+PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_dataplane.py   # 28/28  ← 含 D19 的 8 项
 PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_assembly.py    # 13/13  ← 装配层
 PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_acceptance.py  #  8/8   ← M4 离线
-PYTHONDONTWRITEBYTECODE=1 python tests/test_tun_ipv4_mss.py   # 14/14
+PYTHONDONTWRITEBYTECODE=1 python tests/test_tun_ipv4_mss.py   # 15/15
 PYTHONDONTWRITEBYTECODE=1 python tests/test_tun_device.py     #  7/7
 PYTHONDONTWRITEBYTECODE=1 python tests/test_registration.py   # 15/15
 PYTHONDONTWRITEBYTECODE=1 python tests/test_protocol.py       # 10/10
@@ -310,7 +318,9 @@ python tools/l3_m1c_loopback.py             # M1c，下一步
 
 1. **§8.5 的四个问题**（上行要不要 HMAC、`Random_Num` 能否长期复用、BR 的 PID 会不会
    老化、单 SID 有无速率限制）。第三个直接决定 D1 能否成立、§8.4 的兜底要不要默认
-   打开。**要 RM/BR 团队的答复，或真机实测。**
+   打开。**要 RM/BR 团队的答复，或真机实测。** rev.6 又加了第 6 问：带 ACL 的新版 RM
+   的 `Random_Num` 是否仍是常量（手头源码 `get.c` 写死 `0x20220220`）。是常量则 D19
+   没有副作用；改成真随机的话，每条新连接的 GET 会让同 SID 其他连接的下行丢一小段。
 2. **最小弱主机开关集合**。采用 D18 后这条不再挡路，D9 仍是备选，四个全开是安全超集。
 3. **多提供端时的选源策略**。`consumer/state.py` 的 `_sid_table` 是单值的：两个提供端
    发布同一服务串会得到同一 L_sid、不同 N_sid，后入表者覆盖先入表者。原型单提供端

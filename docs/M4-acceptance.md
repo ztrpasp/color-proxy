@@ -394,7 +394,8 @@ SELECT * FROM items;              -- 10 万行一次吐回来，看会不会卡�
 
 - 四类语句都正确返回，10 万行的 `SELECT` 能跑完、不卡死。
 - `tunnel_up = 1`：一条长连接、多次往返共用同一条隧道（§5.1，隧道以 **SID** 为单位
-  而非以流为单位）。**开第二个客户端后 `tunnel_up` 仍应是 1**，且不会再发 GET。
+  而非以流为单位）。**开第二个客户端后 `tunnel_up` 仍应是 1**；rev.6 起它会为准入再发
+  一次 GET（消费端 `admit_get` +1，D19），但那只是刷新同一条隧道。
 - `admit_drop = 0`、`src_bind_drop = 0`、`sid_miss = 0`。
 - 大 `SELECT` 卡死 = MSS clamp 只做了一侧（§6.2）：查两端 `mss_clamped` 是否都 > 0、
   两端 color0 的 MTU 是否都是 1280。
@@ -409,6 +410,45 @@ SELECT * FROM items;              -- 10 万行一次吐回来，看会不会卡�
 - **连上就卡在握手**：MySQL 的握手包不大，卡这里通常不是 MSS 问题，先看提供端
   `tun_tx` 有没有涨（没涨 = 上行没到，按 §6 的表分流）。
 - **`max_allowed_packet`**：默认 64 MB，本用例够用；真要传大 BLOB 时两端都要调。
+
+---
+
+## 4b. 用例四：RM 的 ACL 按连接生效（rev.6，D19）
+
+需要**带 ACL 功能的 RM**。目的是确认三件事：RM 改了 ACL 后新连接立刻被拦；已经在跑的连接
+不受影响；其他 SID 不受影响。消费端 `l3.get_per_connection` 保持默认的 `true`。
+
+### 4b.1 准备
+
+- 提供端发布两条服务：SID1 = `tcp://172.10.9.2:8000`（用最小连通性判据那个 HTTP 源站），
+  SID2 = 另一个端口（例如 MySQL 的 `3306`，或再起一个 `python -m http.server 8001 --bind 0.0.0.0`）。
+- 消费端分别访问两条，确认都通：
+
+```powershell
+curl http://172.10.9.2:8000/hello.html
+curl http://172.10.9.2:8001/
+```
+
+### 4b.2 步骤
+
+1. 在 SID1 上开一条**长连接**并让它一直跑：`curl --limit-rate 50k -o NUL http://172.10.9.2:8000/<一个几十 MB 的文件>`，
+   或者用 `tools/rtp_video.py` 跑一条视频流（视频要发布成 SID1，它每 10 s 发一次上行保活）。
+2. 在**提供端的 RM** 上设 ACL：拒绝本消费端 NID 访问 SID1。
+3. 新开一个窗口再 `curl` 一次 SID1，再 `curl` 一次 SID2。
+4. 撤销 ACL，再 `curl` 一次 SID1。
+
+### 4b.3 判据
+
+- 第 3 步的 SID1：`curl` 连接超时（Windows 约 21 s）。消费端每 5 秒左右出现一行
+  「新连接准入超时 … RM 的 ACL 拒绝了本消费端」，`admit_timeout` 随客户端重传 SYN 上涨；
+  提供端**没有**新的「L3 隧道已刷新」日志（GET 被 RM 丢了，到不了提供端）。
+- 第 1 步的长连接 / 视频流**不中断**（连接级粒度，§8.6）。
+- 第 3 步的 SID2 照常返回。
+- 第 4 步的 SID1 恢复正常。
+- 顺带回答设计 §8.5 第 6 问：RM 的 `Random_Num` 是否仍是常量。L3 的握手不打印 rn，
+  改走 v1 路径连发两次（`curl -x 127.0.0.1:8910 http://<一条 v1 发布的 URL>`），
+  看提供端日志 `GET 携带 Random_Num=…` 两次的值是否相同。**不同**的话，再看第 1 步的
+  长连接在别的客户端新建连接时有没有短暂卡顿（§8.6 最后一条代价）。
 
 ---
 
@@ -432,7 +472,8 @@ PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_acceptance.py   # 8/8
 | 被动 FTP | 控制 + 通配是**两条独立隧道**、回程按内层源端口各自反推 SID、端口不串台（rev.2 的单键 `PeerTun` 正是死在这里，D14） |
 | 被动 FTP | 通配只放宽**目的**粒度到主机级；换 IP 仍拦、伪造内层源仍拦（§8.3 末段） |
 | 视频流 | 600 包持续流只握手一次、无 per-packet 状态；净载荷正好 1252 必过；超限与分片分别计 `mtu_drop` / `frag_drop`，不静默 |
-| MySQL | 200 次小往返共用一条隧道；第二条连接不再发 GET；未发布端口即使持有合法 SID 也打不进去 |
+| MySQL | 200 次小往返共用一条隧道；第二条连接只为准入再发一次 GET、不新建隧道（D19）；未发布端口即使持有合法 SID 也打不进去 |
+| RM 的 ACL | 在 `tests/test_l3_dataplane.py` 的假链路上模拟「RM 丢掉被拒的 GET」：新连接被拦、已有连接照常、撤销后恢复；并发新连接只发一个 GET；UDP 待准入期间的包不会从旧隧道抢跑 |
 
 它**不覆盖**的（只有真机能验）：真 tun 读写、内核注入与路由选择、真实客户端的协议
 行为（FTP 的 PASV 协商、MySQL 的握手包、RTP 的时序）、以及吞吐与时延。
@@ -456,6 +497,7 @@ PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_acceptance.py   # 8/8
 | 小包通、大 UDP 静默丢 | `frag_drop` | 内层 UDP 净载荷超过 1252（D15） |
 | 跑着跑着断了、重启消费端才好 | `no_tunnel_drop` | D1 的已知风险：提供端重启 / BR PID 表老化会让隧道静默失效。把消费端 `l3.tunnel_redetect_sec` 设成 30 打开重探兜底（§8.4） |
 | 回程查不到隧道 | `no_peer_drop` | 内层目的地址没登记在 `l3.peers[]` |
+| 已有连接正常，新连接全部超时 | 消费端 `admit_timeout` | 新连接准入的 GET 没有回复：RM 的 ACL 拒绝了本消费端（预期行为，§8.6）；没设 ACL 时则查 RM/提供端是否在线 |
 
 `load0_mismatch` **不影响转发**，只作诊断（D13）：对端实现的 `load[0]` 与本文不一致
 时会涨，包照常处理。
@@ -468,6 +510,6 @@ PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_acceptance.py   # 8/8
    `docs/HANDOVER-l3.md` 的里程碑表。
 2. 视频流若撞到 pps 上限，把实测的 pps 数字记下来——那是 M5「去 scapy」的立项依据。
    **性能数字与压测脚本按既定规矩只进 `perf/bench` 分支，不进 `dev_tun`。**
-3. §8.5 的五个问题（上行是否需要 HMAC、`Random_Num` 长期复用、BR 的 PID 是否会老化、
-   单 SID 有无速率限制、RM 的表会不会老化）在真机上会给出答案，其中前三个直接决定
-   D1 能否成立，务必记录。
+3. §8.5 的六个问题（上行是否需要 HMAC、`Random_Num` 长期复用、BR 的 PID 是否会老化、
+   单 SID 有无速率限制、RM 的表会不会老化、新版 RM 的 `Random_Num` 是否仍是常量）在真机上
+   会给出答案，其中前三个直接决定 D1 能否成立，第六个决定 D19 有无副作用，务必记录。

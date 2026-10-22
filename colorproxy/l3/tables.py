@@ -6,7 +6,10 @@
   rev.2 的 ``PeerTun`` 数据面学习已删除，消费端身份来自静态 ``peers[]``（D14，§7.3）。
 - **消费端的 ``ConsumerTunnelTable``** 以 SID 为单位，不以流为单位：同一 ``(proto,ip,port)``
   的所有连接共用一条隧道，内层 IP/TCP 头天然完成解复用（§5.1）。
+  每条**新连接**（TCP SYN / 新 UDP 流）会为所属 SID 重发一次 GET 并原子刷新隧道，
+  好让 RM 的 ACL 按连接生效（D19）；已有连接不受影响。
 - **``FlowCache``** 纯性能措施：否则每个包都要拼串 + SHA1 + 查表（§7.1 上行第 5 步）。
+- **``UdpFlowTable``** 只给 D19 用：UDP 没有 SYN，靠它判断"新流"。
 """
 from __future__ import annotations
 
@@ -184,13 +187,17 @@ class ConsumerTunnelTable:
                 and moment - tunnel.last_downstream_at > silence_sec
             ]
 
-    def begin_redetect(self, sid: str, now: float | None = None) -> bool:
-        """把一条**已建立**的隧道置为"重探中"，返回 True 表示本次应当发 GET。
+    def begin_refresh(self, sid: str, now: float | None = None) -> bool:
+        """为一条**已建立**的隧道重发 GET，返回 True 表示本次应当发 GET。
 
-        与 ``begin_handshake`` 的区别：**保留旧隧道**。上行在重探期间继续走旧路径，
-        新的隧道 DATA 到达时 ``establish()`` 原子替换（§8.4 的"新旧 PID 路径原子
-        替换"）。在途的旧路径下行包照常被接收——下行不校验 PID，故不需要额外的宽限
-        窗口。重探超时由 ``expire_handshakes`` 一并回收，旧隧道不受影响。
+        两处用到：§8.4 的下行静默重探，以及 D19 的新连接准入（新连接的首包先入队，
+        等这个 GET 的回复）。同一条 SID 同一时刻最多一个 GET 在途，并发的新连接
+        合并到同一个 GET 上。
+
+        与 ``begin_handshake`` 的区别：**保留旧隧道**。已有连接在此期间继续走旧路径，
+        新的隧道 DATA 到达时 ``establish()`` 原子替换并冲刷队列。在途的旧路径下行包
+        照常被接收——下行不校验 PID，故不需要额外的宽限窗口。超时由
+        ``expire_handshakes`` 一并回收，旧隧道不受影响。
         """
         with self._lock:
             if sid not in self._tunnels or sid in self._pending_since:
@@ -246,3 +253,88 @@ class FlowCache:
     def __len__(self) -> int:
         with self._lock:
             return len(self._entries)
+
+
+#: ``UdpFlowTable.classify`` 的三种结果
+FLOW_NEW = "new"            # 新流：要先过一次 GET
+FLOW_PENDING = "pending"    # 正在等这条流的 GET 回复：包也要入队
+FLOW_ADMITTED = "admitted"  # 已放行：直接走隧道
+
+#: UDP 流的键：``(src_ip, src_port, dst_ip, dst_port)``，地址用 4 字节原始形式
+UdpFlowKey = tuple[bytes, int, bytes, int]
+
+
+@dataclass
+class _UdpFlow:
+    sid: str
+    last_seen: float
+    admitted: bool
+
+
+class UdpFlowTable:
+    """UDP 的"新连接"判定（D19）。
+
+    TCP 看 SYN 就知道是不是新连接，UDP 没有这个信号，只能按四元组（协议已固定为
+    UDP）记最后一次上行时刻：没见过、或上行空闲超过 ``idle_sec`` 的就算新流，要先
+    过一次 GET。等 GET 回复期间这条流的后续包同样要入队——放它们从旧隧道直接发出，
+    就等于绕过了准入。
+
+    空闲只按上行计，下行路径不碰这张表。``tools/rtp_video.py`` 这类单向推流的客户端
+    靠周期性上行保活（默认 10 s）维持"已放行"。
+    """
+
+    def __init__(self, idle_sec: float = 60.0, capacity: int = 4096) -> None:
+        self._lock = threading.Lock()
+        self._flows: dict[UdpFlowKey, _UdpFlow] = {}
+        self._idle_sec = idle_sec
+        self._capacity = capacity
+
+    def classify(self, key: UdpFlowKey, sid: str, now: float | None = None) -> str:
+        """判定一个上行包属于哪种流；新流会被登记为待准入。"""
+        moment = now if now is not None else time.monotonic()
+        with self._lock:
+            flow = self._flows.get(key)
+            if flow is not None and flow.sid == sid:
+                if not flow.admitted:
+                    return FLOW_PENDING
+                if moment - flow.last_seen <= self._idle_sec:
+                    flow.last_seen = moment
+                    return FLOW_ADMITTED
+            if key not in self._flows and len(self._flows) >= self._capacity:
+                self._prune_locked(moment)
+                if len(self._flows) >= self._capacity:
+                    # 与 FlowCache 一样整体清空：代价只是这些流各补一次 GET
+                    self._flows.clear()
+            self._flows[key] = _UdpFlow(sid=sid, last_seen=moment, admitted=False)
+            return FLOW_NEW
+
+    def admit_sid(self, sid: str, now: float | None = None) -> None:
+        """该 SID 的 GET 有了回复：把它名下所有待准入的流标为已放行。"""
+        moment = now if now is not None else time.monotonic()
+        with self._lock:
+            for flow in self._flows.values():
+                if flow.sid == sid and not flow.admitted:
+                    flow.admitted = True
+                    flow.last_seen = moment
+
+    def forget_pending(self, sid: str) -> None:
+        """该 SID 的 GET 超时：删掉它名下待准入的流，下一个包会重新触发 GET。"""
+        with self._lock:
+            for key in [k for k, f in self._flows.items() if f.sid == sid and not f.admitted]:
+                del self._flows[key]
+
+    def prune(self, now: float | None = None) -> None:
+        """删掉空闲超时的流（由 ticker 周期调用，防止表无限增长）。"""
+        moment = now if now is not None else time.monotonic()
+        with self._lock:
+            self._prune_locked(moment)
+
+    def _prune_locked(self, moment: float) -> None:
+        # 待准入的流也按 last_seen 清：GET 超时只有几秒，空闲超过 idle_sec 还在等的
+        # 只可能是竞争中漏掉了 forget_pending 的孤儿
+        for key in [k for k, f in self._flows.items() if moment - f.last_seen > self._idle_sec]:
+            del self._flows[key]
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._flows)

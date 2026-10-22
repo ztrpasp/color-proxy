@@ -203,6 +203,16 @@ def test_clamp_skips_non_syn_and_missing_option() -> None:
     assert mss.tcp_flags(udp, udp_header) == 0
 
 
+def test_initial_syn_excludes_syn_ack_and_data() -> None:
+    """D19 只对发起新连接的 SYN 发 GET：SYN-ACK、普通 ACK、UDP 都不算。"""
+    for flags, expected in (("S", True), ("SA", False), ("A", False), ("PA", False),
+                            ("R", False), ("SE", True)):
+        packet = _syn(mss_value=None, flags=flags)
+        assert mss.is_initial_syn(packet, ipv4.parse_header(packet)) is expected, flags
+    udp = _raw(IP(src=CONSUMER_TUN, dst=SERVICE_IP) / UDP(dport=5004))
+    assert not mss.is_initial_syn(udp, ipv4.parse_header(udp))
+
+
 def test_clamp_survives_malformed_options() -> None:
     """选项区来自对端，可能畸形：不得越界读、不得死循环。"""
     packet = bytearray(_syn(1460))

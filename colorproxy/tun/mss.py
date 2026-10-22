@@ -51,6 +51,11 @@ def is_syn(packet: bytes, header: Ipv4Header) -> bool:
     return bool(tcp_flags(packet, header) & TCP_FLAG_SYN)
 
 
+def is_initial_syn(packet: bytes, header: Ipv4Header) -> bool:
+    """是否为发起新连接的 SYN（SYN=1 且 ACK=0），不含 SYN-ACK（D19 新连接准入用）。"""
+    return tcp_flags(packet, header) & (TCP_FLAG_SYN | TCP_FLAG_ACK) == TCP_FLAG_SYN
+
+
 def clamp_syn_mss(packet: bytearray, header: Ipv4Header, max_mss: int) -> int | None:
     """就地把 SYN/SYN-ACK 的 MSS 选项改小到 ``max_mss``，并增量修正 TCP 校验和。
 

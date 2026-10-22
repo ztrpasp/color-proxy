@@ -22,7 +22,7 @@ from ..transport.sender import ColorSender
 from ..tun import ipv4, mss
 from ..tun.device import TunDevice
 from .counters import Counters
-from .tables import FlowCache, MISS, ConsumerTunnelTable
+from .tables import FLOW_ADMITTED, MISS, ConsumerTunnelTable, FlowCache, UdpFlowTable
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +53,7 @@ class L3Consumer:
             handshake_timeout=self.config.tunnel_timeout_sec,
         )
         self.flows = FlowCache()
+        self.udp_flows = UdpFlowTable(idle_sec=self.config.udp_flow_idle_sec)
         self._seg_ids = itertools.count(1)
         self._seg_lock = threading.Lock()
         # 本网段的定向广播地址，用来识别 NetBIOS 一类的本机噪声（见 _endpoint_for_lookup）
@@ -83,12 +84,39 @@ class L3Consumer:
         self.counters.bump("sid_hit")
 
         payload = self._clamped(inner, header)
+        is_new = self._is_new_connection(inner, header, sid)
         tunnel = self.tunnels.get(sid)
-        if tunnel is not None:
-            self._send_upstream(sid, tunnel.rev_pids, tunnel.seg_id, tunnel.next_hop_ip, payload)
-            self.tunnels.mark_upstream(sid)
-            return True
-        return self._queue_and_handshake(sid, payload, endpoint)
+        if tunnel is None:
+            # 首建隧道：这次 GET 本身就过了 RM 的 ACL
+            return self._queue_and_handshake(sid, payload, endpoint)
+        if is_new:
+            return self._queue_and_admit(sid, payload, endpoint)
+        self._send_upstream(sid, tunnel.rev_pids, tunnel.seg_id, tunnel.next_hop_ip, payload)
+        self.tunnels.mark_upstream(sid)
+        return True
+
+    def _is_new_connection(self, inner: bytes, header: ipv4.Ipv4Header, sid: str) -> bool:
+        """这个包是否要先过一次 GET（D19）。
+
+        RM 的 ACL 只检查 GET。隧道按 SID 共用、长期有效（D1），若只在第一个包时发 GET，
+        RM 之后改的 ACL 对这个 SID 就再也管不到了。所以每条新连接都要重发 GET：
+
+        - TCP：``SYN=1 且 ACK=0``。不需要流表——连接建好之前客户端发不出别的包。
+        - UDP：查 ``UdpFlowTable``。正在等 GET 回复的流，后续包也算"新"，一样入队。
+
+        UDP 在首建隧道时也要登记，否则隧道建好后它的下一个包会被当成新流再发一次 GET。
+        """
+        if not self.config.get_per_connection:
+            return False
+        if header.proto == ipv4.PROTO_TCP:
+            return mss.is_initial_syn(inner, header)
+        if header.proto != ipv4.PROTO_UDP:
+            return False  # debug_tunnel_icmp 放进来的 ICMP：不做准入
+        ports = ipv4.parse_ports(inner, header)
+        if ports is None:
+            return False
+        key = (header.src, ports[0], header.dst, ports[1])
+        return self.udp_flows.classify(key, sid) != FLOW_ADMITTED
 
     def _endpoint_for_lookup(
         self, inner: bytes, header: ipv4.Ipv4Header
@@ -153,6 +181,28 @@ class L3Consumer:
             seg_id = self._send_get(sid)
             logger.info("L3 隧道未建立，已发 GET：服务=%s SID=%s… SegID=%d",
                         endpoint, sid[:16], seg_id)
+        return True
+
+    def _queue_and_admit(
+        self, sid: str, payload: bytes, endpoint: tuple[str, str, int]
+    ) -> bool:
+        """隧道已在、来了新连接：首包入队，必要时为这条 SID 重发 GET（D19）。
+
+        GET 的回复到达时 ``_on_tunnel`` 原子替换隧道并冲刷队列；RM 的 ACL 拒绝时 GET
+        被丢、没有回复，超时后 ``expire_handshakes`` 丢掉这些包。已有连接始终走旧隧道，
+        两种结果都不影响它们。同一条 SID 同时只有一个 GET 在途，并发的新连接共用它。
+        """
+        dropped = self.tunnels.queue_first_packet(sid, payload)
+        self.counters.bump("firstpkt_queued")
+        if dropped:
+            self.counters.bump("firstpkt_dropped", dropped)
+
+        if self.tunnels.begin_refresh(sid):
+            seg_id = self._send_get(sid)
+            self.counters.bump("admit_get")
+            # DEBUG：浏览器一次开好几条连接，INFO 会刷屏；次数看 admit_get 计数器
+            logger.debug("新连接准入，已发 GET：服务=%s SID=%s… SegID=%d",
+                         endpoint, sid[:16], seg_id)
         return True
 
     def _send_get(self, sid: str) -> int:
@@ -222,15 +272,22 @@ class L3Consumer:
             return True
 
         seg_id = int(data.Segment_ID) if data.Flags.S else 0
-        was_up = self.tunnels.get(sid) is not None  # 重探：旧隧道原子换成新的（§8.4）
+        # 重探或新连接准入：旧隧道原子换成新的（§8.4 / D19）
+        was_up = self.tunnels.get(sid) is not None
         tunnel, queued = self.tunnels.establish(
             sid, reverse_path_for_ack(recv_pids),
             int.from_bytes(bytes(data.NSID), "big"), next_hop, seg_id,
         )
+        self.udp_flows.admit_sid(sid)
         if not was_up:
             self.counters.bump("tunnel_up")
-        logger.info("L3 隧道%s：SID=%s… 下一跳=%s，冲刷首包 %d 个",
-                    "已刷新（重探成功）" if was_up else "已建立", sid[:16], next_hop, len(queued))
+            logger.info("L3 隧道已建立：SID=%s… 下一跳=%s，冲刷首包 %d 个",
+                        sid[:16], next_hop, len(queued))
+        elif queued:
+            logger.debug("新连接准入通过：SID=%s… 下一跳=%s，冲刷 %d 个包",
+                         sid[:16], next_hop, len(queued))
+        else:
+            logger.info("L3 隧道已刷新（重探成功）：SID=%s… 下一跳=%s", sid[:16], next_hop)
         for packet in queued:
             self._send_upstream(sid, tunnel.rev_pids, tunnel.seg_id, tunnel.next_hop_ip, packet)
         if queued:
@@ -286,8 +343,18 @@ class L3Consumer:
         ``l3/service.py`` 的 ticker 周期调用——不是给调用方选做的。
         """
         for sid, dropped, was_redetect in self.tunnels.expire_handshakes():
+            self.udp_flows.forget_pending(sid)
             if dropped:
                 self.counters.bump("firstpkt_dropped", dropped)
+            if was_redetect and dropped:
+                # 隧道还在、却有包在等：是新连接的准入 GET 没回（D19）
+                self.counters.bump("admit_timeout")
+                logger.warning(
+                    "新连接准入超时(%.1fs)：SID=%s… 提供端没回隧道 DATA（RM 的 ACL 拒绝了"
+                    "本消费端，或 GET 丢失），丢弃新连接的包 %d 个；已有连接继续用旧隧道",
+                    self.config.tunnel_timeout_sec, sid[:16], dropped,
+                )
+                continue
             if was_redetect:
                 logger.warning(
                     "L3 隧道重探超时(%.1fs)：SID=%s… 提供端没回隧道 DATA，"
@@ -311,13 +378,17 @@ class L3Consumer:
         if silence <= 0:
             return
         for sid in self.tunnels.silent_tunnels(silence):
-            if not self.tunnels.begin_redetect(sid):
+            if not self.tunnels.begin_refresh(sid):
                 continue
             self._send_get(sid)
             logger.warning(
                 "L3 隧道下行静默 %.1fs（上行仍活跃），重发 GET 探测：SID=%s…（§8.4）",
                 silence, sid[:16],
             )
+
+    def prune_udp_flows(self) -> None:
+        """清掉空闲超时的 UDP 流（D19），由 ``l3/service.py`` 的 ticker 周期调用。"""
+        self.udp_flows.prune()
 
     def _send_upstream(
         self, sid: str, pids: list[int], seg_id: int, next_hop_ip: str, inner: bytes

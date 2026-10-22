@@ -295,12 +295,17 @@ def test_mysql_long_connection_reuses_one_tunnel() -> None:
 
 
 def test_mysql_second_connection_shares_the_tunnel() -> None:
-    """同一 (proto,ip,port) 的第二条 TCP 连接共用隧道，内层头天然解复用（§5.1）。"""
+    """同一 (proto,ip,port) 的第二条 TCP 连接共用隧道，内层头天然解复用（§5.1）。
+
+    D19 起第二条连接会为准入再发一次 GET，但那只是刷新同一条隧道，不新建。
+    """
     link, provider, consumer = _wire((("tcp", 3306),))
     assert consumer.on_tun_packet(_tcp(52000, 3306))
     assert consumer.on_tun_packet(_tcp(52001, 3306))
 
-    assert link.gets == 1, "第二条连接不该再发 GET"
+    assert link.gets == 2, "第二条连接应为准入再发一次 GET（D19）"
+    assert consumer.counters.get("admit_get") == 1
+    assert consumer.counters.get("tunnel_up") == 1, "准入只刷新隧道，不新建"
     assert consumer.tunnels.count() == 1 and provider.tunnels.count() == 1
     assert len(provider.tun.pop_written()) == 2
 

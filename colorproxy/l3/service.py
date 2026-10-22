@@ -323,8 +323,8 @@ class ProviderL3Service(_L3ServiceBase):
 class ConsumerL3Service(_L3ServiceBase):
     """消费端的 L3 运行期（§1.3）。
 
-    周期任务比提供端多两个：握手超时回收（§5.2，**不调首包会永久滞留**）与下行静默
-    重探（§8.4 的兜底，默认关闭）。
+    周期任务比提供端多三个：握手超时回收（§5.2，**不调首包会永久滞留**）、下行静默
+    重探（§8.4 的兜底，默认关闭）与 UDP 流表清理（D19，``get_per_connection`` 开时）。
     """
 
     _pump_name = "L3TunRead(consumer)"
@@ -358,6 +358,10 @@ class ConsumerL3Service(_L3ServiceBase):
         tasks: list[Callable[[], None]] = [self.dataplane.expire_handshakes]
         if self.config.tunnel_redetect_sec > 0:
             tasks.append(self.dataplane.redetect_silent_tunnels)
+        if self.config.get_per_connection:
+            # D19 的 UDP 流表：不清的话每个用过的源端口都留一条
+            tasks.append(_Throttled(self.dataplane.prune_udp_flows,
+                                    self.config.udp_flow_idle_sec / 2))
         # 计数器按 COUNTER_LOG_SEC 打，但 ticker 周期更短，故自己节流
         tasks.append(_Throttled(_CounterLog(self.counters, "L3/消费端"), COUNTER_LOG_SEC))
         return tasks

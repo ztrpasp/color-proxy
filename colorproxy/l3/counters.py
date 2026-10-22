@@ -28,8 +28,10 @@ COUNTER_HELP: dict[str, str] = {
     "proto_drop": "非 TCP/UDP，不进隧道（D11）",
     "load0_mismatch": "load[0] 类型位与 SID 所属模式不符；不影响转发，只作诊断（D13）",
     "mss_clamped": "改写过 MSS 的握手包数",
-    "firstpkt_queued": "隧道未建立时入队的首包数",
-    "firstpkt_dropped": "首包队列超限或握手失败而丢弃的包数",
+    "firstpkt_queued": "等 GET 回复期间入队的包数（首建隧道，或 D19 新连接准入）",
+    "firstpkt_dropped": "等 GET 期间因队列超限或 GET 超时而丢弃的包数",
+    "admit_get": "新连接触发的 GET 数（D19：隧道已在，为让 RM 的 ACL 生效而重发）",
+    "admit_timeout": "新连接准入超时：多为 RM 的 ACL 拒绝了这个消费端，也可能是 GET 丢了；已有连接不受影响",
 }
 
 

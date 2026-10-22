@@ -225,6 +225,12 @@ def test_consumer_l3_config_enforces_route_isolation() -> None:
         os.unlink(path)
     assert config.l3.capture_routes == ("172.10.0.2/32",)
     assert config.l3.tunnel_timeout_sec == 5.0
+    assert config.l3.get_per_connection is True, "D19 默认开：ACL 要按连接生效"
+    assert config.l3.udp_flow_idle_sec == 60.0
+
+    _expect_reject(
+        load_consumer_config, _consumer_cfg(udp_flow_idle_sec=0), "udp_flow_idle_sec 不是正数"
+    )
 
     _expect_reject(
         load_consumer_config,
