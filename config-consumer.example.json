@@ -25,6 +25,9 @@
         "desc": "端点级 HTTP：SID 表未就绪时的降级路径（设计 §9.2）"
       }
     ],
+    "app_services": [
+      { "proto": "tcp", "ip": "172.10.9.2", "port": 8000, "app": "http" }
+    ],
     "tunnel_timeout_sec": 5.0,
     "firstpkt_queue_pkts": 4,
     "firstpkt_queue_bytes": 8192,

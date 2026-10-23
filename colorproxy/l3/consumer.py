@@ -21,6 +21,7 @@ from ..protocol.utils import verify_checksum
 from ..transport.sender import ColorSender
 from ..tun import ipv4, mss
 from ..tun.device import TunDevice
+from .content import HttpContentGate
 from .counters import Counters
 from .tables import FLOW_ADMITTED, MISS, ConsumerTunnelTable, FlowCache, UdpFlowTable
 
@@ -58,6 +59,17 @@ class L3Consumer:
         self._seg_lock = threading.Lock()
         # 本网段的定向广播地址，用来识别 NetBIOS 一类的本机噪声（见 _endpoint_for_lookup）
         self._broadcast = ipv4.subnet_broadcast(self.config.tun_ip, self.config.tun_mask)
+        # D20：配了 app=http 的端点才有内容级准入门；没配就是 None，数据面与以前完全一样
+        http_services = [svc for svc in self.config.app_services if svc.app == "http"]
+        self.content: HttpContentGate | None = HttpContentGate(
+            http_services,
+            lookup_url=self.state.lookup_by_url,
+            send_get=self._send_get,
+            forward=self._dispatch_upstream,
+            write_tun=self._write_tun,
+            counters=self.counters,
+            admit_timeout=self.config.tunnel_timeout_sec,
+        ) if http_services else None
 
     # ------------------------------------------------------------ 上行（§7.1）
 
@@ -85,6 +97,16 @@ class L3Consumer:
 
         payload = self._clamped(inner, header)
         is_new = self._is_new_connection(inner, header, sid)
+        if self.content is not None and self.content.watches(endpoint):
+            # D20：受管 HTTP 端点的包先过内容级准入门，由它决定转发、扣留还是丢弃；
+            # 要转发的仍经下面的 _dispatch_upstream（含 D19）
+            return self.content.on_upstream(payload, header, endpoint, sid, is_new)
+        return self._dispatch_upstream(sid, payload, endpoint, is_new)
+
+    def _dispatch_upstream(
+        self, sid: str, payload: bytes, endpoint: tuple[str, str, int], is_new: bool
+    ) -> bool:
+        """把一个上行包交给服务级隧道：未建立则排队握手，新连接先准入（D19），否则直接发。"""
         tunnel = self.tunnels.get(sid)
         if tunnel is None:
             # 首建隧道：这次 GET 本身就过了 RM 的 ACL
@@ -94,6 +116,11 @@ class L3Consumer:
         self._send_upstream(sid, tunnel.rev_pids, tunnel.seg_id, tunnel.next_hop_ip, payload)
         self.tunnels.mark_upstream(sid)
         return True
+
+    def _write_tun(self, packet: bytes) -> None:
+        """把本端构造的包（D20 的 RST）写回 tun，交给本机协议栈。"""
+        self.tun.write(packet)
+        self.counters.bump("tun_tx")
 
     def _is_new_connection(self, inner: bytes, header: ipv4.Ipv4Header, sid: str) -> bool:
         """这个包是否要先过一次 GET（D19）。
@@ -232,6 +259,8 @@ class L3Consumer:
         if data.Flags.B or data.Flags.r:
             return False  # B=1 是本端发出的 ACK；r=1 是 RM 的服务摘要应答
         sid = sid_hex_from_packet(bytes(data.NSID), bytes(data.LSID))
+        if self.content is not None and self.content.claims(sid):
+            return self._on_content_reply(data, sid)
         if self.tunnels.get(sid) is None and not self.tunnels.is_pending(sid):
             return False
 
@@ -249,9 +278,25 @@ class L3Consumer:
         """
         data = ColorData(payload)
         sid = sid_hex_from_packet(bytes(data.NSID), bytes(data.LSID))
+        if self.content is not None and self.content.claims(sid):
+            return self._on_content_reply(data, sid)
         if not self.tunnels.is_pending(sid):
             return False
         return self._on_tunnel(data, sid)
+
+    def _on_content_reply(self, data: ColorData, sid: str) -> bool:
+        """URL SID 的隧道 DATA（D20）：RM 放行了这个 URL，交给准入门放包。
+
+        回复里的 PID/下一跳不用存：数据走的是服务级隧道，URL SID 只用来过 ACL。
+        """
+        self.counters.bump("colr_rx")
+        load = bytes(data.payload)
+        if load and load[0] & WEB_MSG_TYPE_MASK == WebMsgType.TUNNEL:
+            assert self.content is not None
+            self.content.on_admission_reply(sid)
+        else:
+            self.counters.bump("load0_mismatch")
+        return True
 
     def _on_tunnel(self, data: ColorData, sid: str) -> bool:
         if not self.tunnels.is_pending(sid):

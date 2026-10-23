@@ -59,6 +59,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import dataclasses
 import http.server
 import logging
 import os
@@ -826,6 +827,12 @@ def main() -> int:
 
     provider_config = load_config(args.config)
     consumer_config = load_consumer_config(args.consumer_config)
+    if consumer_config.l3.app_services:
+        # M1c 验的是服务级的 tun / 内核路径。D20 的内容级准入会把本脚本的 "GET /" 当成未发布
+        # 的 URL 直接 RST，判据于是挂在「没拿到响应」上、看着像隧道不通——这里关掉它
+        consumer_config = dataclasses.replace(
+            consumer_config, l3=dataclasses.replace(consumer_config.l3, app_services=()))
+        print('[info] 本脚本只验服务级路径，已临时关闭 l3.app_services（D20 内容级准入）')
     if not provider_config.l3.services:
         raise SystemExit("config.json 的 l3.services[] 为空")
     if consumer_config.l3.tun_ip != provider_config.l3.peers[0].tun_ip:

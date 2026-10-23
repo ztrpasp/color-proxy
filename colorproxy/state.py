@@ -44,6 +44,9 @@ class ProviderState:
         # -- L3 隧道模式（v2）。两张表与 v1 的 _web_services 并列，模式分派靠
         # "SID 落在哪张表里"判定，不靠 load[0]（docs/design-l3-v2.md §4.1，D13）。
         self._l3_services: dict[str, L3ServiceConfig] = {}  # sid -> L3 服务
+        #: L3 内容级（D20）：URL SID -> (所属端点, URL)。这类 SID 只出现在准入 GET 与它的
+        #: 隧道 DATA 回复里，数据仍走端点自己的服务级 SID，所以与 _l3_services 分开放。
+        self._l3_content: dict[str, tuple[L3ServiceConfig, str]] = {}
         # peers 是**静态**表：由配置在此处一次性建立，数据面永不写入（D14，§7.3）。
         # 故不需要放进 _lock 保护，建好即只读。
         self._peer_tun_ip: dict[int, str] = {p.nid: p.tun_ip for p in config.l3.peers}
@@ -122,6 +125,19 @@ class ProviderState:
     def l3_service_count(self) -> int:
         with self._lock:
             return len(self._l3_services)
+
+    def add_l3_content(self, sid: str, service: L3ServiceConfig, url: str) -> None:
+        with self._lock:
+            self._l3_content[sid] = (service, url)
+
+    def get_l3_content(self, sid: str) -> tuple[L3ServiceConfig, str] | None:
+        """URL SID → (所属 L3 端点, URL)；不是 L3 内容级 SID 时返回 None（D20）。"""
+        with self._lock:
+            return self._l3_content.get(sid)
+
+    def l3_content_count(self) -> int:
+        with self._lock:
+            return len(self._l3_content)
 
     def find_l3_service_for_endpoint(
         self, proto: str, ip: str, port: int

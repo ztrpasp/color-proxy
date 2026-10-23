@@ -3,7 +3,9 @@
 两种粒度共用同一套 ANN 报文与登记流程，只有 L_sid 的算法不同（§0.2）：
 
 - 内容级（v1）：``services[]`` 的 URL → ``lsid_from_url``，登记进 ``_web_services``；
-- 服务级（v2）：``l3.services[]`` 的三元组 → ``lsid_from_service``，登记进 ``_l3_services``。
+- 服务级（v2）：``l3.services[]`` 的三元组 → ``lsid_from_service``，登记进 ``_l3_services``；
+- L3 内容级（D20）：``app=http`` 端点的每条 ``paths`` → ``content_url`` → ``lsid_from_url``，
+  登记进 ``_l3_content``。
 
 两张表并列，后续按"SID 落在哪张表里"分派模式（docs/design-l3-v2.md §4.1，D13）。
 
@@ -112,9 +114,30 @@ def _publish_l3_services(state: ProviderState, sender: ColorSender) -> None:
             f" [{service.desc}]" if service.desc else "",
             sid[:16],
         )
+    for service in l3.services:
+        published += _publish_l3_content(state, sender, service)
     if published:
-        logger.info("L3 服务发布完毕：共 %d 条，已知消费端 %d 个",
-                    state.l3_service_count(), len(l3.peers))
+        logger.info("L3 服务发布完毕：服务级 %d 条、内容级 %d 条，已知消费端 %d 个",
+                    state.l3_service_count(), state.l3_content_count(), len(l3.peers))
+
+
+def _publish_l3_content(state: ProviderState, sender: ColorSender, service) -> int:
+    """为一个 ``app=http`` 端点的每条 path 发布内容级 SID（D20），返回本次发出的 ANN 数。
+
+    端点自己的服务级 SID 照常发布（上面那段）：TCP 建连与数据都走它，URL SID 只用于
+    逐请求的准入 GET。日志打**完整** SID——在 RM 上给某个 URL 配 ACL 时要用。
+    """
+    sent = 0
+    for url in service.content_urls:
+        lsid = lsid_from_url(url)
+        sid = sid_hex(nid_to_bytes(state.nid), lsid)
+        state.add_l3_content(sid, service, url)
+        if not state.mark_announced(sid, lsid):
+            continue
+        sender.send(state.rm_ipv4, _build_announce(state.nid, lsid))
+        sent += 1
+        logger.info("已发布 L3 内容 %s（经 %s）SID=%s", url, service.canonical, sid)
+    return sent
 
 
 def _build_announce(

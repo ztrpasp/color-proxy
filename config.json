@@ -43,7 +43,8 @@
       }
     ],
     "services": [
-      { "proto": "tcp", "ip": "172.10.9.2", "port": 8000, "desc": "HTTP 源站" },
+      { "proto": "tcp", "ip": "172.10.9.2", "port": 8000, "desc": "HTTP 源站（D20：另按 URL 发布内容级 SID）",
+        "app": "http", "paths": ["/hello.html", "/showcase.html", "/items.html", "/api/items"] },
       { "proto": "tcp", "ip": "172.10.9.2", "port": 21, "desc": "FTP 控制" },
       { "proto": "tcp", "ip": "172.10.9.2", "port": 0, "desc": "FTP 被动数据（通配，见设计 §8.3）" },
       { "proto": "tcp", "ip": "172.10.9.2", "port": 3306, "desc": "MySQL" },

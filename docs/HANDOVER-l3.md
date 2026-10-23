@@ -1,7 +1,7 @@
 # 交接文档 —— L3 隧道模式（分支 `dev_tun`）
 
 > 目的：让新会话直接接着做，不必重建上下文。
-> 开场读序：**本文 → `docs/design-l3-v2.md`（契约，rev.6）→ `docs/M4-acceptance.md`**。
+> 开场读序：**本文 → `docs/design-l3-v2.md`（契约，rev.7）→ `docs/M4-acceptance.md`**。
 > v1 的背景见 `docs/HANDOVER.md`。截至 2026-10-23。
 
 ---
@@ -39,7 +39,18 @@ ACL，而 L3 每条 SID 只发一次 GET，之后的连接都复用缓存的 PID
 §8.6，真机用例在 M4 手册 §4b（需要带 ACL 的 RM）。实现复用了 §8.4 重探的「保留旧隧道、
 回包原子替换」：`ConsumerTunnelTable.begin_redetect` 已改名 `begin_refresh`，两处共用。
 
-回归基线：**127 项断言 + 3 个脚本式 e2e，全绿**。
+**2026-10-23（同日）：HTTP 在 L3 下找回内容级准入（设计 rev.7，D20）。** RM 的 ACL 原先在
+L3 里只能管到 `tcp://172.10.9.2:8000` 整个端口。现在提供端在 `l3.services[]` 的 HTTP 条目上
+加 `app: "http"` + `paths`，按 URL 另发 SID；消费端在 `l3.app_services[]` 声明这个端点是 HTTP，
+每个请求先扣住，解析出请求行后为 `SHA1(http://172.10.9.2:8000/<path>)` 发 GET，回了才放行
+（数据仍走服务级隧道，端到端 TCP 不断），URL 未发布立刻 RST、GET 超时（ACL 拒绝）5 s 后 RST。
+用户当场定的两件事：**连接走端口级、请求走 URL 级**（不把数据改用 URL SID 承载，也不在消费端
+终结 TCP 转给 v1）；**拒绝时两端各发 RST**（不注入 403 页面）。新模块：`l7/http.py`（纯解析，
+以后的 FTP 也放 `l7/`）、`tun/tcp.py`、`l3/content.py`。**v1 一行没动。** 契约与边界在设计
+§8.7，真机用例在 M4 手册 §4c。实现时有一处偏离计划：Upgrade/CONNECT **不**开透传，按普通
+请求准入、升级后的字节被 RST——开透传的话带一个 `Upgrade` 头就能绕过后续请求的检查。
+
+回归基线：**170 项断言 + 3 个脚本式 e2e，全绿**（D20 新增 43 项）。
 
 ---
 
@@ -262,9 +273,12 @@ MSS clamp 都是验证过的**，真机上新增的只有 Wintun 与内核路径
 ## 6. 怎么跑
 
 ```bash
-# 离线回归（全绿基线：127 项断言 + 3 个脚本）
+# 离线回归（全绿基线：170 项断言 + 3 个脚本）
 PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_m0.py          # 15/15
 PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_dataplane.py   # 28/28  ← 含 D19 的 8 项
+PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_content.py     # 21/21  ← D20 内容级准入
+PYTHONDONTWRITEBYTECODE=1 python tests/test_l7_http.py        # 15/15  ← HTTP 请求流解析
+PYTHONDONTWRITEBYTECODE=1 python tests/test_tun_tcp.py        #  7/7   ← TCP 段 / RST
 PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_assembly.py    # 13/13  ← 装配层
 PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_acceptance.py  #  8/8   ← M4 离线
 PYTHONDONTWRITEBYTECODE=1 python tests/test_tun_ipv4_mss.py   # 15/15
@@ -298,6 +312,8 @@ python tools/l3_m1c_loopback.py             # M1c，下一步
 | 两端数据面端到端（真 CoLoR 报文、假链路） | `test_l3_dataplane.py` |
 | **两端装配的 D13 分派、读线程、超时回收、重探** | `test_l3_assembly.py` |
 | **三个 M4 用例各自的协议级危险点** | `test_l3_acceptance.py` |
+| **D20：扣留/放行、未发布与 ACL 拒绝的 RST、keep-alive 逐请求准入、重传、并发单飞** | `test_l3_content.py`（异步假链路）；测试另做过变异检查（把门改成从不扣留，4 项失败） |
+| RST 的 IP/TCP 校验和 | `test_tun_tcp.py`，与 scapy 交叉核对 |
 | **两端数据面 + 真 UDP 链路上的一次完整 HTTP 往返** | `l3_m1c_loopback.py --dry-run` |
 | 注入 → 跨网卡投递 → 源站 → 回程 | **M1b 真机**（D9 拓扑下） |
 | **`l3/` 跑在真 tun 上：真内核注入、真路由选择、真 MTU** | **M1c 真机两半全部通过** |
@@ -309,6 +325,7 @@ python tools/l3_m1c_loopback.py             # M1c，下一步
 | CoLoR 链路（GET/隧道/上下行 DATA 经 RM/BR） | **完全没接**，需要 RM/BR 环境 |
 | 跨域 PID 语义在 L3 下 | 复用 v1 的 `reverse_path_for_ack`，有 v1 单测，L3 下未实测 |
 | 三个 M4 用例的真客户端 | 需要第二台机器 |
+| D20 在真内核下的 RST（客户端是否立刻报 reset、源站半连接是否被清掉） | 需要第二台机器 + 带 ACL 的 RM，M4 手册 §4c |
 | 吞吐 / pps / 时延 | M5 推迟；现状每包一次 scapy，估计几千 pps 到顶 |
 | 上行是否需要 HMAC、`Random_Num` 长期复用 | 设计 §8.5，待与 RM/BR 团队确认 |
 

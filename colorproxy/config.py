@@ -12,7 +12,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
-from .protocol.sid import service_canonical
+from .l7 import SUPPORTED_APPS
+from .protocol.sid import content_url, lsid_from_url, service_canonical
 
 #: L3 段各项的缺省值（对照 docs/design-l3-v2.md §9.1）
 L3_DEFAULT_TUN_NAME = "color0"
@@ -40,6 +41,15 @@ class L3ServiceConfig:
     ip: str
     port: int
     desc: str = ""
+    #: 应用层类型（D20）。``"http"`` 表示这个端点上的资源还要按 URL 发布内容级 SID。
+    app: str = ""
+    #: ``app="http"`` 时按 URL 发布的资源路径（以 ``/`` 开头、不含 query）
+    paths: tuple[str, ...] = ()
+
+    @property
+    def content_urls(self) -> tuple[str, ...]:
+        """按 D20 拼出的内容级 URL（``http://<ip>:<port><path>``），每条一个 SID。"""
+        return tuple(content_url(self.ip, self.port, path) for path in self.paths)
 
     @property
     def canonical(self) -> str:
@@ -149,10 +159,27 @@ def load_config(path: str | Path) -> Config:
     if not services:
         raise ValueError("配置中至少需要一个 services 条目")
 
-    return Config(
-        nid=nid, ipv4=ipv4, rm_ipv4=rm_ipv4, services=services,
-        l3=_load_l3(data.get("l3")),
-    )
+    l3 = _load_l3(data.get("l3"))
+    _check_content_sid_collisions(services, l3)
+    return Config(nid=nid, ipv4=ipv4, rm_ipv4=rm_ipv4, services=services, l3=l3)
+
+
+def _check_content_sid_collisions(services: list[ServiceConfig], l3: L3Config) -> None:
+    """v1 的 URL 与 L3 内容级（D20）的 URL 不得算出同一条 SID。
+
+    两种模式用同一个 ``lsid_from_url``，而提供端按"SID 落在哪张表里"分派（D13）：撞了就
+    分不清一个 GET 该走 v1（回源）还是 L3（只回隧道 DATA）。v1 的 URL 一般写的是物理地址
+    （172.10.0.2），L3 的是虚服务地址（172.10.9.2），正常不会撞；撞了一定是配错了。
+    """
+    web = {lsid_from_url(service.url): service.url for service in services}
+    for index, service in enumerate(l3.services):
+        for url in service.content_urls:
+            if lsid_from_url(url) in web:
+                raise ValueError(
+                    f"l3.services[{index}] 的内容级 URL {url} 与 services[] 里的 "
+                    f"{web[lsid_from_url(url)]} 算出同一条 SID：同一条 SID 不能同时属于 v1 "
+                    "与 L3（按 SID 分派，D13）。把其中一边的地址改开"
+                )
 
 
 def _default_origin(url: str) -> tuple[str, int]:
@@ -206,9 +233,11 @@ def _load_l3(data: dict | None) -> L3Config:
         seen_canonical[canonical] = index
         proto, rest = canonical.split("://", 1)
         ip, port = rest.rsplit(":", 1)
-        services.append(
-            L3ServiceConfig(proto=proto, ip=ip, port=int(port), desc=str(entry.get("desc", "")))
-        )
+        app, paths = _load_app(entry, where, proto, int(port))
+        services.append(L3ServiceConfig(
+            proto=proto, ip=ip, port=int(port), desc=str(entry.get("desc", "")),
+            app=app, paths=paths,
+        ))
 
     peers: list[PeerConfig] = []
     seen_tun_ip: dict[str, int] = {}
@@ -275,6 +304,43 @@ def _load_l3(data: dict | None) -> L3Config:
         peers=tuple(peers),
         services=tuple(services),
     )
+
+
+def _load_app(entry: dict, where: str, proto: str, port: int) -> tuple[str, tuple[str, ...]]:
+    """读取并校验一条 L3 服务的 ``app`` / ``paths``（D20）。
+
+    path 原样参与 SID 计算、**不做归一化**（理由见 ``protocol.sid.content_path``），所以
+    这里只挡明显写错的：不以 ``/`` 开头、带 query/fragment、含空白、重复。
+    """
+    app = str(entry.get("app", "")).strip().lower()
+    raw_paths = entry.get("paths", [])
+    if not isinstance(raw_paths, list):
+        raise ValueError(f"{where}.paths 必须是列表")
+    if app and app not in SUPPORTED_APPS:
+        raise ValueError(f"{where}.app 只能是 {' / '.join(SUPPORTED_APPS)}，收到：{app!r}")
+    if raw_paths and app != "http":
+        raise ValueError(f"{where} 配了 paths 但 app 不是 \"http\"：内容级 SID 目前只支持 HTTP")
+    if app != "http":
+        return app, ()
+    if proto != "tcp" or port == 0:
+        raise ValueError(f"{where}.app=http 只能用于 tcp 且端口不能是 0（通配）")
+    if not raw_paths:
+        raise ValueError(
+            f"{where}.app=http 时 paths 不能为空：消费端会拒绝 SID 表里没有的 URL，"
+            "一条都不发布等于这个端口上的请求全部被拒"
+        )
+    paths: list[str] = []
+    for position, raw in enumerate(raw_paths):
+        path = str(raw)
+        label = f"{where}.paths[{position}]"
+        if not path.startswith("/"):
+            raise ValueError(f"{label}({path!r}) 必须以 / 开头")
+        if any(ch in path for ch in "?#") or any(ch.isspace() for ch in path):
+            raise ValueError(f"{label}({path!r}) 不能含 ? # 或空白：query 本来就不参与 SID")
+        if path in paths:
+            raise ValueError(f"{label}({path!r}) 重复")
+        paths.append(path)
+    return app, tuple(paths)
 
 
 def _require_ipv4(value: object, where: str) -> str:

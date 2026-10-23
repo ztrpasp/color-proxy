@@ -10,6 +10,9 @@ SID = N_sid(提供方 NID, 16 字节) ‖ L_sid(20 字节)，统一以 72 位十
   ``service_canonical``（docs/design-l3-v2.md §3.1，D12）。
 
 两种粒度的哈希域按 scheme 天然隔离：内容级恒为 http/https，服务级恒为 tcp/udp。
+
+L3 隧道里的 HTTP 也可以按内容级受控（D20）：URL 由内层目的地址与请求行拼成，见
+``content_url``；算法与 v1 相同，所以提供端要保证两种模式发布的 URL 不撞 SID。
 """
 from __future__ import annotations
 
@@ -65,6 +68,35 @@ def service_canonical(proto: str, ipv4: str, port: int) -> str:
     if not 0 <= port_num <= 65535:
         raise ValueError(f"服务端口越界：{port_num}（应在 0–65535，0 表示通配）")
     return f"{key}://{ip}:{port_num}"
+
+
+def content_path(target: str) -> str:
+    """从 HTTP request-target 取出参与 SID 计算的 path（D20）。
+
+    - origin-form ``/a/b?x=1#f`` → ``/a/b``；
+    - absolute-form ``http://host:port/a/b?x`` → ``/a/b``（主机部分不用，见 ``content_url``）；
+    - 空 path 记作 ``/``。
+
+    **不做任何归一化**（不解 ``%xx``、不消 ``/./``、不合并 ``//``）：RM 的 ACL 是黑名单，
+    做了归一化就得与源站的归一化逐字一致，否则能换个写法绕过拒绝；不做的话，任何没有
+    发布过的写法都查不到 SID、直接被拒，反而绕不过去。
+    """
+    if target[:8].lower().startswith(("http://", "https://")):
+        path = urlsplit(target).path
+    else:
+        path = target.split("#", 1)[0].split("?", 1)[0]
+    return path or "/"
+
+
+def content_url(ipv4: str, port: int, path: str) -> str:
+    """L3 内容级（D20）的规范 URL：``http://<ipv4>:<port><path>``，端口恒写出。
+
+    两端必须逐字符一致，故一律经由本函数拼串：提供端拿配置的 ``ip/port/paths``，消费端拿
+    内层包的目的地址与请求行里的 path。**Host 头不参与**——它可以随便写，内层目的地址
+    才是这条连接真正去的地方。L_sid 仍是 v1 的 ``lsid_from_url``。
+    """
+    ip = str(ipaddress.IPv4Address(str(ipv4).strip()))
+    return f"http://{ip}:{int(port)}{content_path(path)}"
 
 
 def lsid_from_service(proto: str, ipv4: str, port: int) -> bytes:

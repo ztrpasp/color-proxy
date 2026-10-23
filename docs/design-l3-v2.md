@@ -1,8 +1,18 @@
 # 共生网络代理终端 — L3 隧道模式设计方案 v2（契约级）
 
-> 状态：v2 设计（契约级），rev.6。与 `docs/design-server-v1.md` / `docs/design-client-v1.md` 并列。
+> 状态：v2 设计（契约级），rev.7。与 `docs/design-server-v1.md` / `docs/design-client-v1.md` 并列。
 > 定位：在 v1「内容级 HTTP 模式」之外**新增**一种「服务级 L3 隧道模式」，两者共存、共用同一套 NID/SID/PID 机制与网络栈。L3 模式**取代**早期探索过的「端点级 L4 会话中继」方案（D17）：同一批应用只保留一条实现路径。
 > 适用对象：消费端与提供端两侧负责方。本文 §2–§8 为**两端必须一致的契约**，§9 起为实现建议。
+
+**rev.7 变更**（2026-10-23，HTTP 在 L3 下找回内容级准入；**v1 不变，服务级契约不变**）：
+
+- **新增 D20「HTTP 内容级准入」**：`l3.services[]` 里标了 `app: "http"` 的端点，除自己的
+  服务级 SID 外再按 `paths` 逐 URL 发布 SID；消费端在 `l3.app_services[]` 里声明同一端点
+  是 HTTP，**每个请求**先被扣住，解析出请求行后为 `SHA1(http://<ip>:<port><path>)` 发 GET，
+  回了隧道 DATA 才放行（数据仍走服务级隧道），URL 未发布或 GET 超时则向两端各发 RST。
+  端到端 TCP 不被终结。契约与边界见新增的 §8.7，配置见 §9.1 / §9.2；
+- 新增模块：`l7/`（应用层纯解析，先有 HTTP，以后的 FTP 也放这里）、`tun/tcp.py`
+  （TCP 段解析、序号运算、RST 构造）、`l3/content.py`（准入门）。§10.1 / §10.4 / §12 相应补充。
 
 **rev.6 变更**（2026-10-23，适配 RM 新增的 ACL；**只改消费端，报文格式与提供端行为不变**）：
 
@@ -95,6 +105,9 @@ L3 模式把**完整的内层 IP 包**（含 TCP/UDP 头）作为 CoLoR DATA 的
 
 同一套 SID/NID/PID 承载两级粒度，细粒度换缓存、粗粒度换通用性。
 
+> **rev.7 注**：对 HTTP，D20（§8.7）在 L3 下找回了**内容级准入**——RM 的 ACL 可以按 URL
+> 放行或拒绝，端到端 TCP 照旧保持。找不回的仍是**网内缓存**：字节流还是按 TCP 段透传。
+
 ### 0.3 锁定决策
 
 | # | 决策 | 影响 |
@@ -117,6 +130,7 @@ L3 模式把**完整的内层 IP 包**（含 TCP/UDP 头）作为 CoLoR DATA 的
 | **D16** | **§6.3 的 ICMP 3/4 降级为防御性实现** | D3 拓扑下该分支近乎不触发，见 §6.3 |
 | **D17** | **L3 取代端点级 L4 会话中继方案** | 避免两套机制覆盖同一批应用；端点级实现不再演进、不作本文参考 |
 | **D18** | **服务发布改用 §2.5 的虚服务地址 `172.10.9.2`（= 提供端 color0 自己的地址）** | 取代 D9。**省掉服务网卡上的两个**弱主机开关（不在物理网卡上放宽主机模型），color0 自己的两个仍保持开启（§2.3 rev.4 勘误）；无环路风险，契约完全相同 |
+| **D20** | **HTTP 内容级准入**：标了 `app: "http"` 的 L3 端点按 URL 另发 SID；消费端扣住每个请求，按 `SHA1(http://<ip>:<port><path>)` 发 GET，回了才放行，否则 RST；数据仍走服务级 SID | 让 RM 的 ACL 在 L3 下也能按 URL 生效，且不终结 TCP（rev.7）。v1 不变；边界与代价见 §8.7 |
 | **D19** | **新连接准入**：每条新 TCP 连接（`SYN` 且无 `ACK`）/ 新 UDP 流先为所属 SID 重发 GET，回了隧道 DATA 才放行；已建立的连接继续用缓存的隧道 | 让 RM 的 ACL 按连接生效（rev.6）。只改消费端，开关 `l3.get_per_connection`（默认开）；边界与代价见 §8.6 |
 
 ---
@@ -809,6 +823,78 @@ GET」的 SYN**（GET 能到提供端，说明 RM 的 ACL 已经放行）。改�
 
 不想要这些代价、也不需要 ACL 的环境，把 `l3.get_per_connection` 设为 `false` 即可退回 D1 的行为。
 
+### 8.7 D20（HTTP 内容级准入）
+
+**要解决的问题**：L3 下 HTTP 按 `tcp://<ip>:<port>` 发布，RM 的 ACL 只能对整个端口放行或拒绝，
+v1 那种「按 URL 管控」在 L3 里没有了（§0.2）。D20 把它找回来，而且**不终结 TCP**：
+
+```
+客户端 SYN ──► 服务级 SID 隧道（D19 照旧：每条新连接一个 GET）──► 源站
+客户端 "GET /hello.html?x=1" ──► 消费端扣住，不转发
+   url = http://172.10.9.2:8000/hello.html → SID = SHA1(url)
+   ├─ SID 表里没有 → 立刻 RST（客户端、源站各一个）
+   └─ GET(URL SID) ─► RM(ACL) ─► 提供端 ─► 隧道 DATA(URL SID) ─► 消费端
+        回了 → 放行扣住的段，仍走服务级隧道；tunnel_timeout_sec 内没回 → RST
+响应 ◄── 服务级 SID 隧道 ◄── 源站（不变）
+```
+
+**契约（两端必须一致）**：
+
+1. **规范 URL** = `http://<内层目的 ip>:<目的端口><path>`，端口恒写出。`path` 取 request-target
+   去掉 query 与 fragment（absolute-form 只取其 path；空 path 记作 `/`），**不做任何归一化**。
+   **Host 头不参与**——内层目的地址才是这条连接真正去的地方。L_sid = `SHA1(URL)`，与 v1 同一
+   算法；两端都只经 `protocol/sid.py` 的 `content_url()` 拼串。
+2. **提供端**：`l3.services[]` 里 `app: "http"` 的条目，除端点自己的服务级 SID 外，每条
+   `paths` 再发布一条 URL SID（登记进 `_l3_content`，与 `_l3_services` 分开）。收到 URL SID 的
+   GET：做与服务级相同的 `peers[]` 校验与回址解析，回一个隧道 DATA，**不写隧道表**。URL SID
+   **不承载数据**：带它的上行 DATA 丢弃并告警（多半是客户端把 L3 地址配进了 v1 的 :8910 代理）。
+3. **消费端**：`l3.app_services[]` 里 `app: "http"` 的端点，每个请求的字节先扣住，请求行一收全
+   就查 SID 表、发 GET；同一 URL 同时只有一个 GET 在途，并发的请求共用它。URL SID 的隧道 DATA
+   只当「放行」信号，里面的 PID 不存。
+4. **v1 与 L3 内容级的 URL 不得撞 SID**：撞了提供端拒绝启动——按 SID 分派（D13）时分不清该回源
+   还是只回隧道 DATA。正常情况下 v1 写物理地址（`172.10.0.2`）、L3 写虚服务地址（`172.10.9.2`），
+   不会撞。
+
+**为什么数据仍走服务级 SID**：RM 的 ACL 只看 GET，URL SID 出现在 GET 和它的回复里就已经落在
+ACL 生效的位置。数据若也改用 URL SID，提供端回程就不能再由内层源三元组反推 SID（D14），得按
+连接记账；同一连接上的流水线请求还会贴错标签。
+
+**判断不了就 RST（fail-closed）**：请求无法按 HTTP/1.x 解析（TLS、HTTP/2 前言、乱码）、
+Content-Length 与 Transfer-Encoding 同时出现、CL 不合法、TE 最后一项不是 chunked、请求行超过
+8 KB 或请求头超过 64 KB，都直接复位连接。RST 两端各一个：给客户端的写回 tun，`seq` = 客户端
+最近确认到的序号（它的 RCV.NXT）；给源站的经服务级隧道送过去，`seq` = 已转发到的位置（源站的
+RCV.NXT）——RFC 5961 下 `seq` 不准只会换来挑战 ACK。之后 30 s 内这条连接残余的上行一律丢弃。
+
+**扣留规则**（消费端实现，非契约）：流内偏移 H 之前的字节都属于已准入的请求；H = 最早一个
+「未准入、或请求行还没收全」的请求起点。段的载荷全在 H 之前就转发，否则扣留（每连接 32 段 /
+64 KB，超出丢最新的，客户端会重传）。纯 ACK 一律直接转发（扣住会耽误下行确认）；只带 FIN 的段
+排在扣留队列末尾。带数据的 SYN（TCP Fast Open）只放 SYN 本身、数据剥掉——否则这份数据绕过了
+解析；源站只确认 SYN，客户端按普通数据重发，届时照常过准入。请求边界由请求头决定，所以只解析
+上行方向就够了。
+
+**边界**：
+
+- **生效粒度是请求**：keep-alive 连接上的每个请求各过一次 GET；已放行的请求不会被中途切断。
+- **被 ACL 拒绝 = GET 没有回复**，所以要等满 `tunnel_timeout_sec`（默认 5 s）才 RST；URL 未发布
+  则立刻 RST。浏览器看到的都是「连接被重置」，不是 403 页面。
+- **不做 path 归一化是刻意的**：RM 的 ACL 是黑名单。若对 `%2E`、`/./` 之类做归一化，就必须与源站
+  的归一化逐字一致，否则换个写法就能绕过拒绝；不做的话，任何没发布过的写法都查不到 SID、直接被拒。
+  代价是客户端必须用发布时的原样路径访问。
+- **不支持**：HTTPS（看不到 URL）、按 Host 区分的虚拟主机、HTTP/2、WebSocket 等 Upgrade。
+  Upgrade 请求按普通请求准入；服务端真的升级之后字节流不再是 HTTP，会被 RST。**不为它开透传**：
+  否则客户端只要带一个 `Upgrade` 头（服务端并不升级），之后的请求就都绕过了检查。
+- **服务级 SID 仍须发布，ACL 也要放行它**：它管「能不能连」，URL SID 管「能不能取」。
+- **信任模型同 D19**：只在消费端执行。被改过的消费端可以不发 URL GET、直接把请求塞进服务级隧道。
+  若要防，提供端可以记下「最近 N 秒内收到过哪些（消费端, URL SID）的 GET」，再解析上行请求
+  比对——本轮不做。
+
+**代价**：每个请求多一个 GET 往返（与 v1「每请求一次握手」相同）；RM 处理的 GET 从每连接一次
+变成每请求一次；没有 RM 时，URL SID 要在 `sids[]` 里预载（同 `static_services[]` 的道理）。
+
+**以后的 FTP**：应用层纯解析都在 `l7/`（不认识 CoLoR/SID/tun），TCP 的机械部分在 `tun/tcp.py`。
+被动 FTP 可以新增 `l7/ftp.py` 从下行字节里读 227/229，再加一个下行钩子，把 §8.3 的通配端口收窄到
+「控制连接刚通告过的端口」。本轮只做 HTTP，下行钩子没有接。
+
 ---
 
 ## 9. 配置（契约）
@@ -875,6 +961,18 @@ GET」的 SYN**（GET 能到提供端，说明 RM 的 ACL 已经放行）。改�
 
 `l3.services[]` 的每一项在加载时按 §3.1 归一化并算出 SID，登记进 `_l3_services`，同时发 ANN（与 `services[]` 的 web 服务各走一张表，D13）。
 
+**rev.7（D20）**：HTTP 端点可另加两项，按 URL 发布内容级 SID（§8.7）：
+
+```json
+{ "proto": "tcp", "ip": "172.10.9.2", "port": 8000, "desc": "HTTP 源站",
+  "app": "http", "paths": ["/hello.html", "/showcase.html", "/items.html", "/api/items"] }
+```
+
+加载时 fail-fast：有 `paths` 就必须写 `app: "http"`；`app: "http"` 时 `paths` 不能为空、只能用于
+tcp 且端口不能是 0；path 必须以 `/` 开头、不含 `?` `#` 与空白、不得重复；任一 URL 与
+`services[].url` 算出同一条 SID 则拒绝启动。端点自己的 `tcp://172.10.9.2:8000` 照常发布（建连
+靠它）；URL SID 的 ANN 日志打的是**完整** 72 位 SID，在 RM 上给某个 URL 配 ACL 时用。
+
 ### 9.2 `config-consumer.json` 新增 `l3` 段
 
 ```json
@@ -902,10 +1000,18 @@ GET」的 SYN**（GET 能到提供端，说明 RM 的 ACL 已经放行）。改�
     "tunnel_redetect_sec": 0,
     "get_per_connection": true,
     "udp_flow_idle_sec": 60,
-    "debug_tunnel_icmp": false
+    "debug_tunnel_icmp": false,
+    "app_services": [
+      { "proto": "tcp", "ip": "172.10.9.2", "port": 8000, "app": "http" }
+    ]
   }
 }
 ```
+
+`app_services`（rev.7，D20，默认空）：声明哪些端点是 HTTP、要做逐请求的内容级准入（§8.7）。
+加载时 fail-fast：`app` 只能是 `http`、只能用于 tcp 且端口不能是 0、地址必须落在某条
+`capture_routes` 内（否则流量根本不进 tun，配了等于没配）、不得重复。没有 RM 时，URL SID 写进
+现成的 `sids[]` 预载即可（URL 照 §8.7 的规范形式写，如 `http://172.10.9.2:8000/hello.html`）。
 
 `get_per_connection`（rev.6，D19，默认 `true`）：每条新连接先为所属 SID 重发 GET，让 RM 的 ACL 按连接生效；`false` 退回 D1 的「每条 SID 只发一次 GET」。`udp_flow_idle_sec`（默认 60，必须 > 0）：UDP 四元组上行空闲多久算新流。两项都只在消费端，提供端无需任何配置改动。
 
@@ -953,12 +1059,16 @@ colorproxy/
     device_linux.py   /dev/net/tun（后续）
     ipv4.py           内层包解析：version/ihl/proto/src/dst/ports/DF/MF/frag_off/总长
     mss.py            MSS clamp + TCP 校验和增量更新
+    tcp.py            TCP 段解析 / 序号运算 / 构造 RST（rev.7，D20）
     icmp.py           构造 ICMP 3/4（§6.3，D16 已降级）与可选的 3/1
   l3/
     sid.py            规范服务串 + L_sid（§3）
     tables.py         Tunnel / L3Tunnel / peers_by_tun_ip / 流缓存
     consumer.py       §7.1 两个方向
     provider.py       §7.2 两个方向（含 §7.3 双向准入校验）
+    content.py        D20 的 HTTP 内容级准入门：连接跟踪、扣留/放行、URL SID 准入、RST（rev.7）
+  l7/                 应用层纯解析，不认识 CoLoR / SID / tun（rev.7）
+    http.py           HTTP/1.x 请求流增量解析（以后的 ftp.py 也放这里）
 ```
 
 `protocol/`、`transport/`、注册与 ANN 的**报文构造**全部复用，`protocol/constants.py` 只改一个掩码加两个枚举值。但有四处现有代码必须小改，不要漏进 M0 清单：
@@ -1012,6 +1122,9 @@ tun_rx / tun_tx / sid_hit / sid_miss / tunnel_up
 / colr_tx / colr_rx / admit_drop / src_bind_drop / no_peer_drop
 / frag_drop / mtu_drop / no_tunnel_drop / nonipv4_drop / nonunicast_drop / proto_drop
 / load0_mismatch / admit_get / admit_timeout          ← 后两个仅消费端（rev.6，D19）
+/ http_req / http_admit_get / http_admit_ok / http_admit_timeout
+/ http_url_miss / http_parse_rst / http_hold_drop / http_ooo_drop   ← 仅消费端（rev.7，D20）
+/ content_get                                         ← 仅提供端（rev.7，D20）
 ```
 
 最高频的几个及其含义：
@@ -1026,6 +1139,9 @@ tun_rx / tun_tx / sid_hit / sid_miss / tunnel_up
 | `nonunicast_drop` | 本机往 tun 上发的广播/组播 | **正常现象，不用管**。新建的 tun 上 mDNS/SSDP/NetBIOS/IGMP 每秒好几个。rev.4 起单独计数：混进 `sid_miss` 会把"路由配宽了"这个诊断彻底淹掉（M1c 真机一次 7 秒的运行里 20 个 `sid_miss` 全是噪声） |
 | `load0_mismatch` | `load[0]` 类型位与 SID 所属模式不符 | 对端实现的 `load[0]` 与本文不一致；**不影响转发**，只作诊断（D13） |
 | `admit_timeout` | 新连接准入的 GET 没有回复（D19） | RM 的 ACL 拒绝了本消费端访问该 SID（预期行为）；没设 ACL 时涨，则是 GET 丢了或提供端不在 |
+| `http_admit_timeout` | URL SID 的准入 GET 没有回复，连接被 RST（D20） | RM 的 ACL 拒绝了这个 URL（预期行为）；没设 ACL 时涨，则是 GET 丢了，或提供端没发布这条 path |
+| `http_url_miss` | URL 不在 SID 表里，连接被 RST（D20） | 访问了没发布的路径（浏览器自动请求的 `/favicon.ico` 就算一次）；或两端拼出的 URL 不一致 |
+| `http_parse_rst` | 受管端点上的数据不是可解析的 HTTP/1.x（D20） | 把 HTTPS / 非 HTTP 服务配进了 `app_services`；或客户端发了有歧义的请求 |
 
 ---
 
@@ -1061,5 +1177,6 @@ M1c 同理：tun 设备、地址规划、MTU、MSS 与 CoLoR 完全正交，先�
 | 网内缓存 | 可 | 不可 |
 | 握手次数 | 每请求一次 | 每 SID 一次（长期有效） |
 | 准入校验 | 握手时查表一次 | **逐包双向校验**（§7.3） |
+| 内容级准入（RM 的 ACL 按 URL） | 天然具备（每请求一个 GET） | HTTP 端点配 `app: "http"` 后具备（D20，§8.7），其余应用只有服务级 |
 
 两个模式在同一进程内共存，**按 SID 所属的服务表分派**（D13，不是按 `load[0]`），互不干扰。提供端可以同时发布 web 类型与 l3 类型的 SID。

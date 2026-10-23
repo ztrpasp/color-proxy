@@ -55,6 +55,9 @@ class L3Provider:
     def handle_get(self, payload: bytes) -> bool:
         """收到 GET：校验 SID ∈ 已发布的 L3 服务 → 定回址 → 记隧道 → 回隧道 DATA。
 
+        URL SID（D20 内容级准入）走同一个入口：校验与回址完全相同，只是**不记隧道**——
+        数据仍走该端点的服务级 SID，这个 GET 的意义只在于"RM 的 ACL 放它过来了"。
+
         返回 False 表示这个 GET 不属于 L3（调用方应交给 v1 路径或丢弃）。
         """
         if not verify_checksum(payload):
@@ -62,8 +65,10 @@ class L3Provider:
         get = ColorGet(payload)
         sid = sid_hex_from_packet(bytes(get.NSID), bytes(get.LSID))
         service = self.state.get_l3_service(sid)
-        if service is None:
+        content = None if service is not None else self.state.get_l3_content(sid)
+        if service is None and content is None:
             return False  # 不是 L3 的 SID，交回调用方分派
+        label = service.canonical if service is not None else content[1]
 
         consumer_nid = int.from_bytes(bytes(get.NID), "big")
         pids = list(get.PID_List)
@@ -76,14 +81,20 @@ class L3Provider:
             logger.warning(
                 "拒绝 L3 握手：消费端 NID=%032x 未登记在 l3.peers[]，"
                 "建了隧道也过不了来源校验（服务 %s）",
-                consumer_nid, service.canonical,
+                consumer_nid, label,
             )
             return True
 
         return_ip = self.state.resolve_return_ip(consumer_nid, pids)
         if return_ip is None:
-            logger.warning("无法确定回送地址（域内/跨域均未命中），忽略 L3 GET：%s",
-                           service.canonical)
+            logger.warning("无法确定回送地址（域内/跨域均未命中），忽略 L3 GET：%s", label)
+            return True
+
+        if content is not None:
+            self._reply_tunnel(sid, consumer_nid, pids, seg_id, random_num, return_ip)
+            self.counters.bump("content_get")
+            # DEBUG：每个 HTTP 请求一条，INFO 会刷屏；次数看 content_get 计数器
+            logger.debug("内容级准入 GET 已回应：%s 消费端=%032x", label, consumer_nid)
             return True
 
         is_new = self.tunnels.put(L3Tunnel(
@@ -92,16 +103,20 @@ class L3Provider:
         ))
         if is_new:
             self.counters.bump("tunnel_up")
+        self._reply_tunnel(sid, consumer_nid, pids, seg_id, random_num, return_ip)
+        logger.info("L3 隧道%s：服务=%s 消费端=%032x 回址=%s",
+                    "已建立" if is_new else "已刷新", label, consumer_nid, return_ip)
+        return True
 
+    def _reply_tunnel(self, sid: str, consumer_nid: int, pids: list[int], seg_id: int,
+                      random_num: bytes | None, return_ip: str) -> None:
+        """回一个隧道 DATA（``load[0]=TUNNEL|LAST``，无载荷）。"""
         tunnel_load = bytes([WebMsgType.TUNNEL | LoadFlag.LAST])
         self.sender.send(return_ip, build_data_packet(
             self.state.nid, sid, consumer_nid, pids, seg_id, tunnel_load,
             hmac_seed=random_num,
         ))
         self.counters.bump("colr_tx")
-        logger.info("L3 隧道%s：服务=%s 消费端=%032x 回址=%s",
-                    "已建立" if is_new else "已刷新", service.canonical, consumer_nid, return_ip)
-        return True
 
     # ------------------------------------------------------ 注入方向（§7.2 注入）
 
@@ -118,6 +133,16 @@ class L3Provider:
         sid = sid_hex_from_packet(bytes(data.NSID), bytes(data.LSID))
         service = self.state.get_l3_service(sid)
         if service is None:
+            content = self.state.get_l3_content(sid)
+            if content is not None:
+                # URL SID 只用于准入 GET，数据走端点的服务级 SID（D20）。带着它的上行
+                # DATA 几乎一定是 v1 的 ACK：浏览器把 L3 地址也配进了 v1 的 :8910 代理
+                logger.warning(
+                    "收到 L3 内容级 SID 的上行 DATA，丢弃：%s。L3 下这条 SID 不承载数据；"
+                    "多半是客户端把 %s 配进了 v1 的 HTTP 代理（:8910），L3 地址不能走代理",
+                    content[1], content[0].ip,
+                )
+                return True
             return False  # 交回调用方：可能是 v1 的 HTTP 请求
 
         self.counters.bump("colr_rx")

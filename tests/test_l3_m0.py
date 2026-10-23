@@ -257,6 +257,9 @@ def test_shipped_configs_are_consistent() -> None:
     from colorproxy.protocol.sid import sid_hex_from_url
 
     published = {sid_hex_from_url(provider.nid, svc.url) for svc in provider.services}
+    # D20：L3 端点按 URL 发布的内容级 SID 同样可以被预载（没有 RM 时的降级路径）
+    published |= {sid_hex_from_url(provider.nid, url)
+                  for svc in provider.l3.services for url in svc.content_urls}
     for entry in consumer.sids:
         sid = sid_hex_from_url(entry.provider_nid, entry.url)
         assert sid in published, f"消费端预载的 {entry.url} 在提供端未发布（SID 对不上）"
@@ -272,6 +275,15 @@ def test_shipped_configs_are_consistent() -> None:
         "上行包会被 src_bind_drop 全丢"
     )
     assert peer.nid == consumer.nid, "peers[] 里该 tun_ip 绑的 NID 与消费端 nid 不一致"
+
+    # 消费端声明为 HTTP 的端点，提供端必须按 URL 发布过（D20）；否则每个请求都 http_url_miss
+    http_endpoints = {(svc.proto, svc.ip, svc.port): svc
+                      for svc in provider.l3.services if svc.app == "http"}
+    for app in consumer.l3.app_services:
+        svc = http_endpoints.get(app.endpoint)
+        assert svc is not None and svc.paths, (
+            f"消费端把 {app.endpoint} 声明为 HTTP，提供端却没有为它发布 paths"
+        )
 
 
 # ---------------------------------------------------------------- 两张服务表

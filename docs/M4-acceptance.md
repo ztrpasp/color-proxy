@@ -433,6 +433,9 @@ curl http://172.10.9.2:8001/
 
 1. 在 SID1 上开一条**长连接**并让它一直跑：`curl --limit-rate 50k -o NUL http://172.10.9.2:8000/<一个几十 MB 的文件>`，
    或者用 `tools/rtp_video.py` 跑一条视频流（视频要发布成 SID1，它每 10 s 发一次上行保活）。
+   > **rev.7 起仓库配置给 8000 开了 D20 内容级准入**：那个大文件的路径要加进 `config.json`
+   > 8000 条目的 `paths`，否则请求会被当成未发布的 URL 立刻 reset。只想测 D19 的话，也可以把
+   > 消费端 `l3.app_services` 临时清空。
 2. 在**提供端的 RM** 上设 ACL：拒绝本消费端 NID 访问 SID1。
 3. 新开一个窗口再 `curl` 一次 SID1，再 `curl` 一次 SID2。
 4. 撤销 ACL，再 `curl` 一次 SID1。
@@ -449,6 +452,61 @@ curl http://172.10.9.2:8001/
   改走 v1 路径连发两次（`curl -x 127.0.0.1:8910 http://<一条 v1 发布的 URL>`），
   看提供端日志 `GET 携带 Random_Num=…` 两次的值是否相同。**不同**的话，再看第 1 步的
   长连接在别的客户端新建连接时有没有短暂卡顿（§8.6 最后一条代价）。
+
+---
+
+## 4c. 用例五：RM 的 ACL 按 URL 生效（rev.7，D20）
+
+需要**带 ACL 功能的 RM**。确认四件事：已发布的 URL 正常；没发布的 URL 立刻被断开；RM 拒绝
+某个 URL 后只有它被拦、同一端口上的其他 URL 照常；同一条 keep-alive 连接上逐请求生效。
+
+### 4c.1 准备
+
+- 两端配置用仓库里现成的：`config.json` 的 8000 条目已带 `"app": "http"` 和四条 `paths`，
+  `config-consumer.json` 的 `l3.app_services` 已声明 `172.10.9.2:8000` 是 HTTP。
+- 提供端启动日志里每条 path 有一行「已发布 L3 内容 http://172.10.9.2:8000/... SID=<72 位>」，
+  **把 `/items.html` 那条的完整 SID 抄下来**，第 3 步配 ACL 要用。
+- 源站照旧 `python tools/origin_server.py --host 0.0.0.0 --port 8000`。
+
+### 4c.2 步骤与判据
+
+```powershell
+# 1) 已发布：正常返回
+curl http://172.10.9.2:8000/hello.html
+curl "http://172.10.9.2:8000/api/items?id=1"      # query 不参与 SID，照样通过
+
+# 2) 没发布：立刻 Connection reset（不等 5 秒）
+curl http://172.10.9.2:8000/nope.html
+```
+
+- 第 2 步消费端打一行「URL 未发布到共生网络（SID 表里没有），RST」，`http_url_miss` +1，
+  **没有**发 GET（`http_admit_get` 不涨）。
+
+3. 在**提供端的 RM** 上设 ACL：拒绝本消费端 NID 访问 `/items.html` 的 URL SID。
+4. 再跑：
+
+```powershell
+curl http://172.10.9.2:8000/items.html              # 约 5 秒后 Connection reset
+curl http://172.10.9.2:8000/hello.html              # 照常
+# 同一条 keep-alive 连接上先放行、后拒绝：第一个响应完整拿到，第二个请求时连接被 reset
+curl -v http://172.10.9.2:8000/hello.html http://172.10.9.2:8000/items.html
+```
+
+- 第 4 步被拒的那次：消费端打「内容级准入超时(5.0s)：http://172.10.9.2:8000/items.html …」，
+  `http_admit_timeout` +1；提供端 `content_get` **不涨**（GET 被 RM 丢了）。
+- 撤销 ACL 后 `/items.html` 恢复。
+- 全程服务级 SID `tcp://172.10.9.2:8000` 的 ACL 是放行的——它管「能不能连」，URL SID 管
+  「能不能取」（设计 §8.7）。
+
+### 4c.3 常见坑
+
+- **浏览器测试会多出一次 `http_url_miss`**：浏览器自动请求 `/favicon.ico`，没发布就会被 reset。
+  这是预期行为；想消掉就把 `/favicon.ico` 加进 `paths`。
+- **路径必须与发布时逐字一致**：`/hello%2Ehtml`、`/./hello.html` 这类写法查不到 SID，会被
+  reset。这是刻意的（RM 的 ACL 是黑名单，做归一化就能换个写法绕过，见设计 §8.7）。
+- **不能配 `:8910` 代理**：配了就走 v1。提供端会打一行「收到 L3 内容级 SID 的上行 DATA」的
+  告警，客户端拿到 504。
+- 没有 RM 时（只想先看扣留/放行），把 URL 写进消费端 `sids[]` 预载（仓库的配置已带四条）。
 
 ---
 
@@ -474,6 +532,7 @@ PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_acceptance.py   # 8/8
 | 视频流 | 600 包持续流只握手一次、无 per-packet 状态；净载荷正好 1252 必过；超限与分片分别计 `mtu_drop` / `frag_drop`，不静默 |
 | MySQL | 200 次小往返共用一条隧道；第二条连接只为准入再发一次 GET、不新建隧道（D19）；未发布端口即使持有合法 SID 也打不进去 |
 | RM 的 ACL | 在 `tests/test_l3_dataplane.py` 的假链路上模拟「RM 丢掉被拒的 GET」：新连接被拦、已有连接照常、撤销后恢复；并发新连接只发一个 GET；UDP 待准入期间的包不会从旧隧道抢跑 |
+| 按 URL 的 ACL（D20） | `tests/test_l3_content.py`：请求先扣后放、未发布立刻 RST（seq/ack 核对）、ACL 拒绝超时 RST、keep-alive 逐请求一个 GET、请求行跨段、重传不重复、并发同 URL 只发一个 GET、请求间的 FIN 与纯 ACK 不被扣 |
 
 它**不覆盖**的（只有真机能验）：真 tun 读写、内核注入与路由选择、真实客户端的协议
 行为（FTP 的 PASV 协商、MySQL 的握手包、RTP 的时序）、以及吞吐与时延。
@@ -498,6 +557,9 @@ PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_acceptance.py   # 8/8
 | 跑着跑着断了、重启消费端才好 | `no_tunnel_drop` | D1 的已知风险：提供端重启 / BR PID 表老化会让隧道静默失效。把消费端 `l3.tunnel_redetect_sec` 设成 30 打开重探兜底（§8.4） |
 | 回程查不到隧道 | `no_peer_drop` | 内层目的地址没登记在 `l3.peers[]` |
 | 已有连接正常，新连接全部超时 | 消费端 `admit_timeout` | 新连接准入的 GET 没有回复：RM 的 ACL 拒绝了本消费端（预期行为，§8.6）；没设 ACL 时则查 RM/提供端是否在线 |
+| HTTP 能连上，但某些 URL 约 5 s 后 reset | 消费端 `http_admit_timeout` | 该 URL 的准入 GET 没回：RM 的 ACL 拒绝了它（预期，§8.7）；没设 ACL 时查提供端 `paths` 里有没有这条 |
+| HTTP 某些 URL 立刻 reset | 消费端 `http_url_miss` | URL 不在 SID 表里：没发布，或路径写法与发布时不一致（不做归一化） |
+| 8000 上什么都立刻 reset | 消费端 `http_parse_rst` | 端口上跑的不是明文 HTTP/1.x（HTTPS、h2c），却配进了 `l3.app_services` |
 
 `load0_mismatch` **不影响转发**，只作诊断（D13）：对端实现的 `load[0]` 与本文不一致
 时会涨，包照常处理。

@@ -10,6 +10,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ..l7 import SUPPORTED_APPS
 from ..protocol.sid import service_canonical
 
 #: HTTP 正向代理默认监听端口（用户在浏览器/系统里把 HTTP 代理指向它）
@@ -57,6 +58,25 @@ class StaticService:
 
 
 @dataclass(frozen=True)
+class AppService:
+    """声明某个 L3 端点上跑的是什么应用（``l3.app_services[]``，D20）。
+
+    ``app="http"`` 的端点上每个请求都要先按 URL 过一次准入：消费端解析出请求行，用
+    ``SHA1(http://<ip>:<port><path>)`` 查 SID 表并发 GET，回了才放行，否则 RST。
+    连接本身仍由服务级 SID 承载，所以提供端照样要发布 ``tcp://<ip>:<port>``。
+    """
+
+    proto: str
+    ip: str
+    port: int
+    app: str
+
+    @property
+    def endpoint(self) -> tuple[str, str, int]:
+        return self.proto, self.ip, self.port
+
+
+@dataclass(frozen=True)
 class ConsumerL3Config:
     """消费端 L3 隧道模式配置段（``l3``，docs/design-l3-v2.md §9.2）。"""
 
@@ -81,6 +101,8 @@ class ConsumerL3Config:
     debug_tunnel_icmp: bool = False
     #: SID 表未就绪时的降级路径（§9.2）。为空则完全依赖 RM 下发的表。
     static_services: tuple[StaticService, ...] = ()
+    #: 哪些端点要做应用层解析（D20）。目前只有 ``app="http"``：逐请求的内容级准入。
+    app_services: tuple[AppService, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -196,6 +218,8 @@ def _load_l3(data: dict | None, rm_ipv4: str) -> ConsumerL3Config:
             desc=str(entry.get("desc", "")),
         ))
 
+    app_services = _load_app_services(data.get("app_services", []), capture_routes)
+
     udp_flow_idle_sec = float(data.get("udp_flow_idle_sec", L3_DEFAULT_UDP_FLOW_IDLE_SEC))
     if udp_flow_idle_sec <= 0:
         raise ValueError(
@@ -227,7 +251,43 @@ def _load_l3(data: dict | None, rm_ipv4: str) -> ConsumerL3Config:
         udp_flow_idle_sec=udp_flow_idle_sec,
         debug_tunnel_icmp=bool(data.get("debug_tunnel_icmp", False)),
         static_services=tuple(static_services),
+        app_services=app_services,
     )
+
+
+def _load_app_services(entries: list, capture_routes: list[str]) -> tuple[AppService, ...]:
+    """读取并校验 ``l3.app_services[]``（D20），全部 fail-fast。
+
+    地址必须落在某条 ``capture_routes`` 里：不在的话这个端点的流量根本不进 tun，配了
+    等于没配，而症状是"内容级管控没生效"——比报错难查得多。
+    """
+    networks = [ipaddress.IPv4Network(route) for route in capture_routes]
+    services: list[AppService] = []
+    seen: set[tuple[str, str, int]] = set()
+    for index, entry in enumerate(entries):
+        where = f"l3.app_services[{index}]"
+        try:
+            canonical = service_canonical(entry.get("proto"), entry.get("ip"), entry.get("port"))
+        except ValueError as exc:
+            raise ValueError(f"{where} 不合法：{exc}") from exc
+        proto, rest = canonical.split("://", 1)
+        ip, port_text = rest.rsplit(":", 1)
+        port = int(port_text)
+        app = str(entry.get("app", "")).strip().lower()
+        if app not in SUPPORTED_APPS:
+            raise ValueError(f"{where}.app 只能是 {' / '.join(SUPPORTED_APPS)}，收到：{app!r}")
+        if proto != "tcp" or port == 0:
+            raise ValueError(f"{where}：app={app} 只能用于 tcp 且端口不能是 0（通配）")
+        if networks and not any(ipaddress.IPv4Address(ip) in net for net in networks):
+            raise ValueError(
+                f"{where}.ip({ip}) 不在任何 l3.capture_routes {capture_routes} 内："
+                "这个端点的流量不会进 tun，应用层解析永远不会生效"
+            )
+        if (proto, ip, port) in seen:
+            raise ValueError(f"{where} 重复：{canonical}")
+        seen.add((proto, ip, port))
+        services.append(AppService(proto=proto, ip=ip, port=port, app=app))
+    return tuple(services)
 
 
 def _require_ipv4(value: object, where: str) -> str:

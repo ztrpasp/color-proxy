@@ -32,6 +32,16 @@ COUNTER_HELP: dict[str, str] = {
     "firstpkt_dropped": "等 GET 期间因队列超限或 GET 超时而丢弃的包数",
     "admit_get": "新连接触发的 GET 数（D19：隧道已在，为让 RM 的 ACL 生效而重发）",
     "admit_timeout": "新连接准入超时：多为 RM 的 ACL 拒绝了这个消费端，也可能是 GET 丢了；已有连接不受影响",
+    # D20：HTTP 内容级准入（仅消费端；content_get 仅提供端）
+    "http_req": "受管 HTTP 连接上解析出的请求数（D20）",
+    "http_admit_get": "为 URL SID 发出的准入 GET 数（同一 URL 并发的请求共用一个）",
+    "http_admit_ok": "通过内容级准入的请求数",
+    "http_admit_timeout": "URL 准入超时被 RST 的请求数：多为 RM 的 ACL 拒绝了这个 URL，也可能是 GET 丢了",
+    "http_url_miss": "URL 不在 SID 表里（未发布）而被 RST 的请求数",
+    "http_parse_rst": "请求无法解析（非 HTTP/1.x、边界有歧义、超长）而被 RST 的连接数",
+    "http_hold_drop": "扣留队列超限而丢弃的段数（客户端会重传）",
+    "http_ooo_drop": "受管连接上乱序到达而丢弃的段数（客户端会重传）",
+    "content_get": "提供端回应的 URL SID 准入 GET 数（D20）",
 }
 
 
