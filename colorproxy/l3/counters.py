@@ -42,6 +42,12 @@ COUNTER_HELP: dict[str, str] = {
     "http_hold_drop": "扣留队列超限而丢弃的段数（客户端会重传）",
     "http_ooo_drop": "受管连接上乱序到达而丢弃的段数（客户端会重传）",
     "content_get": "提供端回应的 URL SID 准入 GET 数（D20）",
+    # D21：被动 FTP 的数据连接跟随控制连接（仅提供端）
+    "ftp_expect": "从 227/229 回复登记的数据端口期望数（D21）",
+    "ftp_expect_reject": "拒绝登记的数据端口：低于 1024、等于控制端口，或撞上同一地址另一条已发布服务",
+    "ftp_expect_expired": "期望过期（30 s 内没等到 SYN）：客户端没去连，或连的是别的地址",
+    "ftp_data_admit": "兑现期望、放行的数据连接数",
+    "ftp_resync": "控制连接字节流失去同步（中途接手或序号空洞），对齐之前不登记期望",
 }
 
 

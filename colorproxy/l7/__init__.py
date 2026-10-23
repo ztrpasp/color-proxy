@@ -5,10 +5,10 @@
 到达顺序喂字节即可，所以能离线单测，也能给别的地方复用。
 
 - ``http``：HTTP/1.x 请求流的增量解析（D20 内容级准入用）。
+- ``ftp``：FTP 控制连接的命令/回复解析，从 227/229 读被动数据端口（D21）。
 
-以后的 FTP（被动模式要从 227/229 回复里读数据端口）放 ``ftp.py``，并把名字加进
-``SUPPORTED_APPS``。配置里 ``app`` 字段的合法取值以这里为准。
+配置里 ``app`` 字段的合法取值以这里为准。
 """
 
 #: 配置项 ``app`` 的合法取值（``l3.services[].app`` / ``l3.app_services[].app``）
-SUPPORTED_APPS = ("http",)
+SUPPORTED_APPS = ("http", "ftp")

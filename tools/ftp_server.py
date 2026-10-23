@@ -2,9 +2,9 @@
 
 用法::
 
-    python tools/ftp_server.py                       # 0.0.0.0:21，被动端口 50000-50010
+    python tools/ftp_server.py                       # 0.0.0.0:21，被动端口由系统随机分配
     python tools/ftp_server.py --make-testfile 10    # 顺手造一个 10 MB 下载用测试文件
-    python tools/ftp_server.py --print-services      # 只打印要粘进 config.json 的那几行
+    python tools/ftp_server.py --print-services      # 只打印要粘进两端配置的那一条
 
 依赖 ``pyftpdlib``（``pip install pyftpdlib``）。不需要管理员权限：Windows 对
 1024 以下的端口没有特权限制。
@@ -12,11 +12,12 @@
 与 L3 隧道有关的三条，写死在脚本里或由它提醒（详见 docs/M4-acceptance.md §2）：
 
 1. **必须 bind 0.0.0.0**。只听 127.0.0.1 时内层包注进协议栈没人收，症状与丢包一样。
-2. **客户端必须用被动模式（PASV）**。主动模式要服务端反向发起连接，CoLoR 是拉驱动，
-   提供端建不了隧道（§8.1，结构性限制，不是 bug）。
-3. **被动端口段里每个端口都是另一条 SID、另一条隧道**（§3.3）。要么把端口段逐条写进
-   ``config.json`` 的 ``l3.services[]``，要么发布通配 ``"port": 0``。``--print-services``
-   把两种写法都打出来，直接粘。
+2. **客户端必须用被动模式**（PASV 或 EPSV 都行）。主动模式本轮不支持（§8.1、§8.8）。
+   Windows 自带的 ``ftp.exe`` 只会主动模式，用 curl 或 Python ftplib。
+3. **D21 起被动端口不用再发布**（§8.8）：控制端口标 ``"app": "ftp"`` 后，提供端读 227/229
+   回复、只放行刚通告过的那个端口，数据连接走控制连接的 SID。所以被动端口段可以不限
+   （``--passive-ports`` 只在想固定端口时用），也**不要再发布通配 ``:0``**——发布了它，
+   消费端会优先走通配、被整机放行，D21 的收窄就不起作用了。
 """
 from __future__ import annotations
 
@@ -25,7 +26,6 @@ import json
 import os
 import sys
 
-DEFAULT_PASSIVE_PORTS = "50000-50010"
 #: 服务地址：D18 虚服务地址方案下就是提供端 color0 自己的地址（config.json 的 l3.tun_ip）
 DEFAULT_SERVICE_IP = "172.10.9.2"
 
@@ -42,27 +42,19 @@ def _parse_port_range(text: str) -> range:
     return range(low, high + 1)
 
 
-def _service_entries(service_ip: str, control_port: int, passive: range) -> list[dict]:
-    """按端口段逐条列出要发布的 l3.services[] 条目。"""
-    entries = [{"proto": "tcp", "ip": service_ip, "port": control_port, "desc": "FTP 控制"}]
-    entries += [
-        {"proto": "tcp", "ip": service_ip, "port": port, "desc": f"FTP 被动数据 {port}"}
-        for port in passive
-    ]
-    return entries
+def _service_entry(service_ip: str, control_port: int) -> dict:
+    """D21：只发布控制端口一条，标 app=ftp；被动数据端口不发布。"""
+    return {"proto": "tcp", "ip": service_ip, "port": control_port, "app": "ftp"}
 
 
-def _print_services(service_ip: str, control_port: int, passive: range) -> None:
-    print("把下面这些粘进提供端 config.json 的 l3.services[]（逐条发布，推荐）：\n")
-    for entry in _service_entries(service_ip, control_port, passive):
-        print("  " + json.dumps(entry, ensure_ascii=False) + ",")
-    print(f"\n或者只发两条、用通配覆盖整段（配置短，但目的粒度退化到主机级，见 §8.3）：\n")
-    for entry in (
-        {"proto": "tcp", "ip": service_ip, "port": control_port, "desc": "FTP 控制"},
-        {"proto": "tcp", "ip": service_ip, "port": 0, "desc": "FTP 被动数据（通配）"},
-    ):
-        print("  " + json.dumps(entry, ensure_ascii=False) + ",")
-    print("\n改完 config.json 要重启提供端代理，新 SID 才会发 ANN 给 RM。")
+def _print_services(service_ip: str, control_port: int) -> None:
+    entry = _service_entry(service_ip, control_port)
+    print("把这一条粘进提供端 config.json 的 l3.services[]：\n")
+    print("  " + json.dumps({**entry, "desc": "FTP 控制（D21）"}, ensure_ascii=False) + ",")
+    print("\n同样一条粘进消费端 config-consumer.json 的 l3.app_services[]：\n")
+    print("  " + json.dumps(entry, ensure_ascii=False) + ",")
+    print('\n被动数据端口不用发布；同一地址上也不要再发布通配 "port": 0（§8.8）。')
+    print("改完 config.json 要重启提供端代理，新 SID 才会发 ANN 给 RM。")
 
 
 def _make_testfile(root: str, size_mb: int) -> str:
@@ -85,8 +77,9 @@ def main() -> None:
     parser.add_argument("--user", default="color", help="用户名（默认 color）")
     parser.add_argument("--password", default="color", help="口令（默认 color）")
     parser.add_argument("--anonymous", action="store_true", help="额外允许匿名只读登录")
-    parser.add_argument("--passive-ports", default=DEFAULT_PASSIVE_PORTS,
-                        help=f"被动数据端口段（默认 {DEFAULT_PASSIVE_PORTS}）")
+    parser.add_argument("--passive-ports", default="",
+                        help="被动数据端口段，如 50000-50010。默认不限，由系统随机分配"
+                             "（D21 下不需要发布这些端口）")
     parser.add_argument("--service-ip", default=DEFAULT_SERVICE_IP,
                         help=f"发布用的服务地址，只影响打印（默认 {DEFAULT_SERVICE_IP}）")
     parser.add_argument("--masquerade", default="",
@@ -99,10 +92,10 @@ def main() -> None:
                         help="只打印要发布的 l3.services[] 条目，不起服务")
     args = parser.parse_args()
 
-    passive = _parse_port_range(args.passive_ports)
     if args.print_services:
-        _print_services(args.service_ip, args.port, passive)
+        _print_services(args.service_ip, args.port)
         return
+    passive = _parse_port_range(args.passive_ports) if args.passive_ports else None
 
     try:
         from pyftpdlib.authorizers import DummyAuthorizer
@@ -126,7 +119,8 @@ def main() -> None:
 
     handler = FTPHandler
     handler.authorizer = authorizer
-    handler.passive_ports = list(passive)
+    if passive is not None:
+        handler.passive_ports = list(passive)
     if args.masquerade:
         handler.masquerade_address = args.masquerade
     handler.banner = "color-proxy M4 FTP 源站（仅被动模式可用）"
@@ -134,16 +128,18 @@ def main() -> None:
     server = FTPServer((args.host, args.port), handler)
     print(f"FTP 源站已启动：ftp://{args.host}:{args.port}  根目录 {root}")
     print(f"  账号：{args.user} / {args.password}" + ("（另允许匿名只读）" if args.anonymous else ""))
-    print(f"  被动端口段：{passive.start}-{passive.stop - 1}"
-          f"（共 {len(passive)} 个，每个都是一条独立隧道）")
+    if passive is not None:
+        print(f"  被动端口段：{passive.start}-{passive.stop - 1}")
+    else:
+        print("  被动端口：系统随机分配（D21 按 227/229 动态放行，不用发布）")
     if args.host not in ("0.0.0.0", "::"):
         print("  [!] 没有绑 0.0.0.0：经 L3 访问 "
               f"{args.service_ip}:{args.port} 会收不到包")
-    print("  消费端这样连（必须被动模式）：")
-    print(f"    ftp> open {args.service_ip} {args.port}   然后 passive / quote PASV")
-    print(f"    或 curl --ftp-pasv -u {args.user}:{args.password} "
-          f"ftp://{args.service_ip}:{args.port}/test-10mb.bin -o test-10mb.bin")
-    print("  用 --print-services 打印要粘进 config.json 的发布条目。按 Ctrl+C 退出")
+    print("  消费端这样连（必须被动模式；Windows 自带的 ftp.exe 只会主动模式，别用）：")
+    print(f"    curl --ftp-pasv -u {args.user}:{args.password} "
+          f"ftp://{args.service_ip}:{args.port}/test-10mb.bin -o test-10mb.bin   # 走 EPSV")
+    print("    加 --disable-epsv 走 PASV；Python ftplib 在 IPv4 下也只发 PASV")
+    print("  用 --print-services 打印要粘进两端配置的条目。按 Ctrl+C 退出")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

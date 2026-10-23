@@ -139,6 +139,9 @@ RM/BR；不接 CoLoR 而只想验内层链路的话，跑 `tools/l3_m1c_loopback
 
 ## 2. 用例一：被动 FTP 上传下载
 
+> **rev.8（D21）起**：被动数据端口不再发布，也不用通配 `:0`。控制端口两端都标 `"app": "ftp"`，
+> 提供端读源站的 227/229 回复、只放行刚通告过的那个端口，数据连接走控制连接的 SID（设计 §8.8）。
+
 ### 2.1 起 FTP 源站（P 上）
 
 ```powershell
@@ -146,14 +149,14 @@ pip install pyftpdlib
 python tools/ftp_server.py --make-testfile 10
 ```
 
-默认：`0.0.0.0:21`、账号 `color/color`、根目录 `./ftproot`、被动端口段 `50000-50010`，
+默认：`0.0.0.0:21`、账号 `color/color`、根目录 `./ftproot`、**被动端口由系统随机分配**，
 并顺手造一个 10 MB 的 `test-10mb.bin` 供下载用例。**不需要管理员**——Windows 对
 1024 以下的端口没有特权限制。常用开关：
 
 | 开关 | 用途 |
 |---|---|
-| `--passive-ports 50000-50004` | 改被动端口段（段越小，要发布的 SID 越少） |
-| `--print-services` | 只打印要粘进 `config.json` 的 `l3.services[]`，不起服务 |
+| `--passive-ports 50000-50004` | 固定被动端口段（D21 下不需要，想抓包时好认才用） |
+| `--print-services` | 只打印要粘进两端配置的那一条，不起服务 |
 | `--make-testfile 100` | 造更大的测试文件 |
 | `--anonymous` | 额外允许匿名只读登录 |
 | `--masquerade 172.10.9.2` | PASV 回复里强制通告这个地址（默认不用，见 2.5） |
@@ -164,33 +167,41 @@ python tools/ftp_server.py --make-testfile 10
 netstat -ano | findstr ":21 "
 ```
 
-### 2.2 发布（改 `config.json` 的 `l3.services[]`）
-
-被动数据连接用的是端口段里的端口，**每个端口都是另一条 SID、另一条隧道**（§3.3）。
-两种写法，脚本把两份都打出来：
+### 2.2 发布（两端各一条）
 
 ```powershell
-python tools/ftp_server.py --print-services --passive-ports 50000-50010
+python tools/ftp_server.py --print-services
 ```
 
-- **逐条发布**（推荐）：控制口 21 + 段里每个端口各一条。目的粒度精确到端口，
-  `admit_drop` 才有意义。代价是配置里多十几行。
-- **通配**：只发 `21` 和 `{"port": 0}` 两条。配置短，但目的粒度退化到主机级——
-  持有这条 SID 的消费端能打到 `172.10.9.2` 的**任意 TCP 端口**（§8.3，预期行为）。
+- 提供端 `config.json` 的 `l3.services[]`：`{"proto": "tcp", "ip": "172.10.9.2", "port": 21, "app": "ftp"}`
+- 消费端 `config-consumer.json` 的 `l3.app_services[]`：同样一条（仓库里的两份配置已经是这样）。
+- **同一地址上不要再发布 `{"port": 0}`**。发布了的话消费端会优先命中通配，数据连接被整机放行，
+  D21 的收窄就不起作用了；提供端启动时会打 warning。
 
 改完 `config.json` **要重启提供端代理**（新 SID 在启动时发 ANN）。消费端也要重启：
 本域 SID 表是启动时从 RM 拉一次的。没有 RM 时在消费端 `l3.static_services[]` 里
-预置同样的三元组（§9.2）。
+预置 `tcp://172.10.9.2:21` 这一条（§9.2）。
 
 ### 2.3 客户端（C 上，**必须被动模式**）
 
 ```powershell
-# 下载
-curl --ftp-pasv -u color:color ftp://172.10.9.2/test-10mb.bin -o test-10mb.bin
+# 下载（curl 默认先发 EPSV，走 229）
+curl --noproxy '*' --ftp-pasv -u color:color ftp://172.10.9.2/test-10mb.bin -o test-10mb.bin
+# 同一个文件再走一次 PASV（227）
+curl --noproxy '*' --ftp-pasv --disable-epsv -u color:color ftp://172.10.9.2/test-10mb.bin -o test-pasv.bin
 # 上传
-curl --ftp-pasv -u color:color -T .\upload.bin ftp://172.10.9.2/
+curl --noproxy '*' --ftp-pasv -u color:color -T .\upload.bin ftp://172.10.9.2/
 # 校验（和 P 上 ftproot\ 里的对比）
-Get-FileHash .\test-10mb.bin -Algorithm MD5
+Get-FileHash .\test-10mb.bin, .\test-pasv.bin -Algorithm MD5
+```
+
+**`--noproxy '*'` 不能省**：装了 Clash 一类工具的机器上常有 `all_proxy` 环境变量，curl 会把
+`ftp://` 交给那个 HTTP 代理，表现是 `502 Bad Gateway`，和 CoLoR 毫无关系（2026-10-23 本机踩到）。
+
+Python ftplib 在 IPv4 下只发 PASV，可以当第三个客户端：
+
+```powershell
+python -c "import ftplib; f=ftplib.FTP('172.10.9.2'); f.login('color','color'); f.retrbinary('RETR test-10mb.bin', open('test-ftplib.bin','wb').write); f.quit()"
 ```
 
 FileZilla：站点管理器 → 传输设置 → **被动**。Windows 自带的 `ftp.exe` **只有主动
@@ -198,21 +209,37 @@ FileZilla：站点管理器 → 传输设置 → **被动**。Windows 自带的 
 
 ### 2.4 判据
 
-- 提供端 `tunnel_up`：逐条发布时 = 1（控制）+ 实际用到的被动端口数；通配发布时 = 2。
-- `admit_drop = 0`、`src_bind_drop = 0`、`no_tunnel_drop = 0`、`sid_miss = 0`、`frag_drop = 0`。
-- 上传、下载两个方向的 MD5 都与原文件一致。
+- 提供端 `tunnel_up` = 1：只有控制连接那一条隧道，数据连接不建自己的隧道。
+- 每次传输（`LIST`/`RETR`/`STOR` 各开一条数据连接），提供端 `ftp_expect` 与 `ftp_data_admit`
+  各涨 1；消费端 `admit_get` **不随传输次数增长**（数据连接继承控制连接的准入）。
+- `admit_drop = 0`、`src_bind_drop = 0`、`no_tunnel_drop = 0`、`sid_miss = 0`、`frag_drop = 0`、
+  `ftp_expect_reject = 0`。
+- 上传、下载两个方向的 MD5 都与原文件一致，EPSV 与 PASV 两条路径都要过。
+- **反向判据**：没通告过的端口连不上。在 C 上：
+  ```powershell
+  Test-NetConnection 172.10.9.2 -Port 50999     # TcpTestSucceeded 应为 False
+  ```
+  提供端 `admit_drop` 上涨（每个重传的 SYN 记一次），并打「不是 FTP 控制连接通告过的被动数据端口」。
 - 10 MB 能传完。**卡在几十 KB = MSS clamp 只做了一侧**（§6.2）：查两端 color0 的
   MTU 是否都是 1280、`mss_clamped` 是否都 > 0。
 
 ### 2.5 已知不支持与常见坑
 
-- **主动模式一定不通**（§8.1）。主动模式要服务端反向 connect 客户端，CoLoR 是拉驱动，
-  提供端建不了隧道。这是结构性限制，不是缺陷。
-- **登录成功、`ls` 就卡住** = 数据连接那条 SID 没发布。`LIST` 也走数据连接，所以
-  "能登录"只证明控制口那条隧道通。看消费端 `sid_miss` 是不是在涨。
+- **主动模式本轮不支持**（§8.1、§8.8）。注意它已经不是「结构性不通」：控制连接的隧道在，
+  同一套机制读 `PORT`/`EPRT` 就能做，只是这轮没做。
+- **FTPS（`AUTH TLS`）不支持**：控制连接加密，提供端读不到 227/229，数据连接一律被拒。
+- **登录成功、`ls` 就卡住**，按提供端计数器分三种：
+  - `ftp_expect` 不涨：提供端没给 21 标 `app: "ftp"`，或者同一地址还发布着 `:0`（看启动 warning）；
+  - `ftp_expect` 涨、`ftp_data_admit` 不涨：消费端没标 `app: "ftp"`（消费端 `sid_miss` 在涨），
+    或者客户端照 227 里的地址去连了别处（见下一条）；
+  - `ftp_expect_reject` 涨：源站分到的被动端口撞上了同一地址上另一条已发布的服务端口
+    （如 3306 发布了但 MySQL 没在跑），或低于 1024。重试一次换个端口即可，想彻底避开就用 `--passive-ports`。
 - **PASV 回复的地址**：pyftpdlib 用控制连接的本地地址回复，经隧道进来时正好是
-  `172.10.9.2`，一般不用管。客户端若报"PASV 给的地址连不上"，加
-  `--masquerade 172.10.9.2`。
+  `172.10.9.2`。提供端不信 227 里的地址，一律按控制连接的服务地址登记；curl、ftplib 也都忽略它。
+  客户端若报"PASV 给的地址连不上"，加 `--masquerade 172.10.9.2`。
+- **提供端在会话中途重启**：已经登录的控制连接上，头两次被动传输会失败（提供端要重新对齐字节流，
+  `ftp_resync` 上涨），之后恢复。新登录的会话不受影响。
+- **ACL 对 FTP 按会话生效**：RM 撤销 ACL 后，已登录的会话还能继续传输，直到退出；新登录会被拦（§8.8）。
 - **防火墙**：§1 第 3 步那条 color0 入站放行规则要在，否则数据连接的 SYN 进去了
   没人应答，表现与丢包一样。
 
@@ -517,18 +544,19 @@ curl -v http://172.10.9.2:8000/hello.html http://172.10.9.2:8000/items.html
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_acceptance.py   # 8/8
+PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_ftp.py          # 19/19  ← D21 被动 FTP
 ```
 
 > 真机跑之前还要确认一件事：**三个服务端口上不能有别的进程在听**。M1c 真机就撞过——
 > 机器上另有一个 `python -m http.server` 占着 8000，链路其实是通的，判据却挂在最后
-> 一步，看着像隧道不通。`netstat -ano | findstr ":21 :3306 :5004 :8000 :8554 :50000"` 先过一遍。
+> 一步，看着像隧道不通。`netstat -ano | findstr ":21 :3306 :5004 :8000 :8554"` 先过一遍。
 
 它覆盖的（也就是不必在真机上重新摸索的）：
 
 | 用例 | 钉住的东西 |
 |---|---|
-| 被动 FTP | 控制 + 通配是**两条独立隧道**、回程按内层源端口各自反推 SID、端口不串台（rev.2 的单键 `PeerTun` 正是死在这里，D14） |
-| 被动 FTP | 通配只放宽**目的**粒度到主机级；换 IP 仍拦、伪造内层源仍拦（§8.3 末段） |
+| 被动 FTP（D21） | `tests/test_l3_ftp.py`：EPSV/PASV 两条路径都只走控制连接那一条隧道、不多发 GET；没通告的端口、没有前置 PASV 的 227、多行回复里夹的 227、裸 LF 回显伪造的 229 都不放行；3306/特权端口/控制端口拒绝登记；期望一次性、30 s 过期，伪造源地址和别的消费端都用不了；数据连接超过期望寿命仍通、收尾后清掉；中途接手与序号空洞要先对齐 |
+| 通配端口 | 精确 + 通配是**两条独立隧道**、回程按内层源端口各自反推 SID、端口不串台（rev.2 的单键 `PeerTun` 正是死在这里，D14）；通配只放宽**目的**粒度到主机级，换 IP 仍拦、伪造内层源仍拦（§8.3 末段） |
 | 视频流 | 600 包持续流只握手一次、无 per-packet 状态；净载荷正好 1252 必过；超限与分片分别计 `mtu_drop` / `frag_drop`，不静默 |
 | MySQL | 200 次小往返共用一条隧道；第二条连接只为准入再发一次 GET、不新建隧道（D19）；未发布端口即使持有合法 SID 也打不进去 |
 | RM 的 ACL | 在 `tests/test_l3_dataplane.py` 的假链路上模拟「RM 丢掉被拒的 GET」：新连接被拦、已有连接照常、撤销后恢复；并发新连接只发一个 GET；UDP 待准入期间的包不会从旧隧道抢跑 |
@@ -551,7 +579,8 @@ PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_acceptance.py   # 8/8
 | 隧道建起来了但一个包不过 | 提供端 `src_bind_drop` | 消费端 `l3.tun_ip` 与提供端 `l3.peers[].tun_ip` 不一致（D14） |
 | 隧道建起来了，`colr_rx` 也不涨 | 消费端 `colr_tx` / 提供端 `colr_rx` | 上行 ACK 没到提供端：跨域时 PID/BR 那一段（GET 是 RM 转发的，上行是终端按 PID 自己发的，两条路不同）|
 | `tun_tx` 涨但 `tun_rx` 不涨 | 提供端启动日志 | 包注进去了、协议栈没回话：**源站只听 127.0.0.1**（最常见）、color0 的两个弱主机开关没开、或防火墙把 color0 的入站拦了。三者症状完全一样，逐个排 |
-| 能连上但访问别的端口也通 | 提供端 `admit_drop` | 发布了通配 `:0`，目的粒度退化到主机级（§8.3，预期行为） |
+| 能连上但访问别的端口也通 | 提供端 `admit_drop` | 发布了通配 `:0`，目的粒度退化到主机级（§8.3，预期行为）。FTP 所在地址不该再发布通配（D21） |
+| FTP 能登录、`ls`/下载卡住 | 提供端 `ftp_expect` / `ftp_data_admit` | 见 §2.5 的三种情形：两端有一端没标 `app: "ftp"`、同地址还发布着 `:0`、或被动端口撞上了已发布的服务端口 |
 | 小请求正常、大数据卡死 | 两端 `mss_clamped` | MSS clamp 只做了一侧，或某端 MTU 不是 1280（§6.2） |
 | 小包通、大 UDP 静默丢 | `frag_drop` | 内层 UDP 净载荷超过 1252（D15） |
 | 跑着跑着断了、重启消费端才好 | `no_tunnel_drop` | D1 的已知风险：提供端重启 / BR PID 表老化会让隧道静默失效。把消费端 `l3.tunnel_redetect_sec` 设成 30 打开重探兜底（§8.4） |

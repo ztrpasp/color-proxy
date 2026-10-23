@@ -241,7 +241,11 @@ class ProviderL3Service(_L3ServiceBase):
         return self.dataplane.on_tun_packet
 
     def _periodic_tasks(self) -> list[Callable[[], None]]:
-        return [_CounterLog(self.counters, "L3/提供端")]
+        tasks: list[Callable[[], None]] = [_CounterLog(self.counters, "L3/提供端")]
+        if self.dataplane is not None and self.dataplane.ftp is not None:
+            # D21：期望 30 s 过期、数据连接收尾后清理；ticker 周期（几秒）足够细
+            tasks.append(self.dataplane.ftp.tick)
+        return tasks
 
     def _check_services_listening(self) -> None:
         """发布的 TCP 服务地址上到底有没有人在监听（§2.6 第 4 条）。

@@ -41,7 +41,8 @@ class L3ServiceConfig:
     ip: str
     port: int
     desc: str = ""
-    #: 应用层类型（D20）。``"http"`` 表示这个端点上的资源还要按 URL 发布内容级 SID。
+    #: 应用层类型。``"http"``（D20）：这个端点上的资源还要按 URL 发布内容级 SID；
+    #: ``"ftp"``（D21）：这是 FTP 控制端口，被动数据连接按 227/229 动态放行、走这条 SID。
     app: str = ""
     #: ``app="http"`` 时按 URL 发布的资源路径（以 ``/`` 开头、不含 query）
     paths: tuple[str, ...] = ()
@@ -234,6 +235,9 @@ def _load_l3(data: dict | None) -> L3Config:
         proto, rest = canonical.split("://", 1)
         ip, port = rest.rsplit(":", 1)
         app, paths = _load_app(entry, where, proto, int(port))
+        if app == "ftp" and any(svc.app == "ftp" and svc.ip == ip for svc in services):
+            # 消费端按地址把未知端口回退到 FTP 控制 SID，同一地址两个 FTP 就分不清该走哪条
+            raise ValueError(f"{where}：{ip} 上已经有一个 app=ftp 的端点，同一地址只能有一个（D21）")
         services.append(L3ServiceConfig(
             proto=proto, ip=ip, port=int(port), desc=str(entry.get("desc", "")),
             app=app, paths=paths,
@@ -320,6 +324,9 @@ def _load_app(entry: dict, where: str, proto: str, port: int) -> tuple[str, tupl
         raise ValueError(f"{where}.app 只能是 {' / '.join(SUPPORTED_APPS)}，收到：{app!r}")
     if raw_paths and app != "http":
         raise ValueError(f"{where} 配了 paths 但 app 不是 \"http\"：内容级 SID 目前只支持 HTTP")
+    if app == "ftp" and (proto != "tcp" or port == 0):
+        # D21：app=ftp 标的是**控制端口**，数据端口由 227/229 动态得出，不能也不必用通配
+        raise ValueError(f"{where}.app=ftp 只能标在 tcp 的控制端口上（端口不能是 0）")
     if app != "http":
         return app, ()
     if proto != "tcp" or port == 0:

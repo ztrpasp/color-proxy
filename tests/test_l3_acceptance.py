@@ -8,10 +8,11 @@ M4 的完整判据是"被动 FTP 上传下载 / 一条视频流连续 5 分钟 /
 本文件钉死的是另一半：**三个应用各自特有的、跑真客户端之前就该排掉的危险点**。
 它们都是协议层面的判据，与客户端软件无关，在假链路上验证完全充分：
 
-1. **被动 FTP**：控制连接走 ``tcp://ip:21``、数据连接走临时端口只能命中通配
-   ``tcp://ip:0`` —— 这是**两条隧道**。rev.2 的单键 ``PeerTun[内层src]`` 在这里会
-   互相覆盖，回程包从错误的隧道发出（§3.3 末段、§7.3 的"通配 SID 串台"）。D14 取消
-   数据面学习就是为了这个，必须有回归把它钉住。
+1. **通配端口**（§3.3）：同时发布 ``tcp://ip:21`` 与通配 ``tcp://ip:0`` 时，精确端口
+   与命中通配的连接是**两条隧道**。rev.2 的单键 ``PeerTun[内层src]`` 在这里会互相覆盖，
+   回程包从错误的隧道发出（§3.3 末段、§7.3 的"通配 SID 串台"）。D14 取消数据面学习就是
+   为了这个，必须有回归把它钉住。被动 FTP 以前就靠这种发布方式；D21 起它改为数据连接跟随
+   控制连接、不再需要通配（见 ``test_l3_ftp.py``），通配作为通用能力保留。
 2. **视频流**：内层 UDP 净载荷 ≤ 1252 字节是硬约束（D15）。超过就被内核分片，而
    分片一律丢弃——症状是"小包通、大 UDP 静默丢"。同时验证一条隧道能承载持续流量、
    不随包数增长出任何 per-packet 状态。
@@ -146,10 +147,13 @@ def _inner(raw: bytes) -> tuple[str, str, int, int]:
     return ipv4.format_ipv4(header.src), ipv4.format_ipv4(header.dst), sport, dport
 
 
-# ================================================================ 用例一：被动 FTP
+# ================================================================ 用例一：通配端口（D21 之前的被动 FTP）
 
-def test_passive_ftp_uses_two_independent_tunnels() -> None:
-    """控制连接(:21) 与被动数据连接(临时端口→通配 :0) 是**两条隧道**，不得互相覆盖。
+def test_wildcard_and_exact_port_use_two_independent_tunnels() -> None:
+    """精确端口(:21) 与命中通配(:0) 的连接是**两条隧道**，不得互相覆盖。
+
+    这里沿用 D21 之前被动 FTP 的发布方式（控制 :21 + 通配 :0），D21 之后的做法见
+    ``test_l3_ftp.py``。
 
     这正是 rev.2 的单键 ``PeerTun[内层 src_ip]`` 会出事的场景：同一消费端的两条隧道
     内层源地址是同一个，学习表互相覆盖，回程包会从错误的隧道发出（§3.3、§7.3）。
@@ -180,7 +184,7 @@ def test_passive_ftp_uses_two_independent_tunnels() -> None:
     assert provider.counters.get("admit_drop") == 0
 
 
-def test_passive_ftp_wildcard_degrades_destination_granularity_only() -> None:
+def test_wildcard_degrades_destination_granularity_only() -> None:
     """§8.3：通配只把**目的**粒度放宽到主机级，**来源**侧不退化。"""
     link, provider, consumer = _wire((("tcp", 21), ("tcp", 0)))
     assert consumer.on_tun_packet(_tcp(50002, 56789))

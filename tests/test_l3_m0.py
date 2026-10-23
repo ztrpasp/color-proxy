@@ -276,14 +276,22 @@ def test_shipped_configs_are_consistent() -> None:
     )
     assert peer.nid == consumer.nid, "peers[] 里该 tun_ip 绑的 NID 与消费端 nid 不一致"
 
-    # 消费端声明为 HTTP 的端点，提供端必须按 URL 发布过（D20）；否则每个请求都 http_url_miss
-    http_endpoints = {(svc.proto, svc.ip, svc.port): svc
-                      for svc in provider.l3.services if svc.app == "http"}
+    # 消费端声明了应用类型的端点，提供端必须以同一类型发布：HTTP 还要按 URL 发布过 paths
+    # （D20，否则每个请求都 http_url_miss）；FTP 两端都要标 app=ftp（D21，否则数据连接被拒）
+    app_endpoints = {(svc.proto, svc.ip, svc.port): svc
+                     for svc in provider.l3.services if svc.app}
     for app in consumer.l3.app_services:
-        svc = http_endpoints.get(app.endpoint)
-        assert svc is not None and svc.paths, (
-            f"消费端把 {app.endpoint} 声明为 HTTP，提供端却没有为它发布 paths"
+        svc = app_endpoints.get(app.endpoint)
+        assert svc is not None and svc.app == app.app, (
+            f"消费端把 {app.endpoint} 声明为 {app.app}，提供端没有以同一类型发布它"
         )
+        if app.app == "http":
+            assert svc.paths, f"消费端把 {app.endpoint} 声明为 HTTP，提供端却没有为它发布 paths"
+
+    # D21：FTP 所在地址上不能同时发布通配，否则数据连接会改走通配、被整机放行
+    from colorproxy.l3.ftp import wildcard_conflicts
+
+    assert wildcard_conflicts(provider.l3.services) == [], "config.json 里 FTP 与通配 :0 同时发布"
 
 
 # ---------------------------------------------------------------- 两张服务表
@@ -328,7 +336,7 @@ def test_provider_state_reverse_lookup_by_endpoint_with_wildcard() -> None:
     exact = state.find_l3_service_for_endpoint("tcp", "172.10.0.2", 21)
     assert exact is not None and exact[1].port == 21, "精确端口应优先命中"
 
-    # 被动 FTP 的临时端口只能靠通配项命中
+    # 没有精确项的端口落到通配项（D21 之前的被动 FTP 就靠这个）
     wildcard = state.find_l3_service_for_endpoint("tcp", "172.10.0.2", 50123)
     assert wildcard is not None and wildcard[1].is_wildcard_port
 

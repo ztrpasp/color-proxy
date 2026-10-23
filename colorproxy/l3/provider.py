@@ -4,6 +4,9 @@
 ``PeerTun`` 数据面学习已删除（D14），回程 SID 改由内层**源**三元组反推，与上行严格
 对称；消费端身份由内层**目的**地址查静态 ``peers[]``。
 
+唯一的例外是 D21 的被动 FTP（``l3/ftp.py``）：期望表由**本机源站的 227/229 回复**写入，
+不是从上行学来的，键里的消费端身份同样来自 ``peers[]``，所以不会重现 D14 防的回程劫持。
+
 注：报文解析仍用 scapy 的 ``ColorData``，逐包开销偏大。§10.3 第 1 条要求 M5 把数据面
 彻底去 scapy（预生成头模板 + struct 回填），此处先求正确。
 """
@@ -21,6 +24,7 @@ from ..transport.sender import ColorSender
 from ..tun import ipv4, mss
 from ..tun.device import TunDevice
 from .counters import Counters
+from .ftp import FtpDataHelper
 from .tables import L3Tunnel, L3TunnelTable
 
 logger = logging.getLogger(__name__)
@@ -49,6 +53,10 @@ class L3Provider:
         self.mss_clamp = mss_clamp if mss_clamp is not None else state.config.l3.mss_clamp
         # 本网段的定向广播地址，用来识别 NetBIOS 一类的本机噪声（见 _is_noise）
         self._broadcast = ipv4.subnet_broadcast(state.config.l3.tun_ip, state.config.l3.tun_mask)
+        # D21：配了 app=ftp 的端点才跟踪被动数据连接；没配就是 None，数据面与以前完全一样
+        services = state.config.l3.services
+        self.ftp: FtpDataHelper | None = FtpDataHelper(services, self.counters) \
+            if any(svc.app == "ftp" for svc in services) else None
 
     # ------------------------------------------------------------ 握手（§5 ①②）
 
@@ -178,21 +186,31 @@ class L3Provider:
                            header.more_fragments, header.frag_offset)
             return True
 
-        if not self._admit(inner, header, service, consumer_nid):
+        if not self._admit(inner, header, sid, service, consumer_nid):
             return True
 
+        if self.ftp is not None and service.app == "ftp" and self._is_to_service_port(inner, header, service):
+            # D21：控制连接上的命令，记下来好与源站的 227/229 回复配对
+            self.ftp.on_client_packet(inner, header, sid, service, consumer_nid)
         self.tun.write(self._clamped(inner, header))
         self.counters.bump("tun_tx")
         return True
 
-    def _admit(self, inner: bytes, header: ipv4.Ipv4Header, service, consumer_nid: int) -> bool:
+    def _admit(self, inner: bytes, header: ipv4.Ipv4Header, sid: str, service,
+               consumer_nid: int) -> bool:
         """§7.3 的双向准入校验。两条都过才放行。
 
         这是整个方案最重要的安全点：不逐包校验的话，任何持有一条 SID 的消费端都能
         借这条隧道把流量打到提供端可达的任意地址和端口——D9 开了弱主机模型之后，
         投递范围更是扩大到本机全部网卡地址。
+
+        D21：FTP 控制 SID 上目的端口不是控制端口的包，是被动数据连接，改由
+        ``FtpDataHelper`` 按 227/229 登记的期望判定。
         """
         endpoint = ipv4.endpoint(inner, header, source=False)
+        if endpoint is not None and not service.admits(*endpoint) \
+                and self.ftp is not None and service.app == "ftp":
+            return self._admit_ftp_data(inner, header, sid, service, consumer_nid, endpoint)
         if endpoint is None or not service.admits(*endpoint):
             self.counters.bump("admit_drop")
             logger.warning(
@@ -200,7 +218,31 @@ class L3Provider:
                 endpoint, service.canonical,
             )
             return False
+        return self._source_ok(header, consumer_nid)
 
+    def _admit_ftp_data(self, inner: bytes, header: ipv4.Ipv4Header, sid: str, service,
+                        consumer_nid: int, endpoint: tuple[str, str, int]) -> bool:
+        """FTP 控制 SID 上的被动数据连接（D21）。"""
+        # 来源先验：期望是一次性的，伪造源地址的 SYN 不能把它兑现掉
+        if not self._source_ok(header, consumer_nid):
+            return False
+        assert self.ftp is not None
+        if self.ftp.admit_data(inner, header, sid, consumer_nid):
+            return True
+        self.counters.bump("admit_drop")
+        logger.warning(
+            "准入校验失败(目的)：%s 不是 FTP 控制连接 %s 通告过的被动数据端口（没有对应的"
+            " 227/229，或期望已过期/已被用掉），丢弃", endpoint, service.canonical,
+        )
+        return False
+
+    @staticmethod
+    def _is_to_service_port(inner: bytes, header: ipv4.Ipv4Header, service) -> bool:
+        ports = ipv4.parse_ports(inner, header)
+        return ports is not None and ports[1] == service.port
+
+    def _source_ok(self, header: ipv4.Ipv4Header, consumer_nid: int) -> bool:
+        """来源校验：内层源地址必须是这个消费端在 ``peers[]`` 里登记的 tun 地址（D14）。"""
         expected_src = self.state.peer_tun_ip(consumer_nid)
         actual_src = ipv4.format_ipv4(header.src)
         if expected_src != actual_src:
@@ -246,12 +288,17 @@ class L3Provider:
         if source_endpoint is None:
             self.counters.bump("proto_drop")
             return False
-        found = self.state.find_l3_service_for_endpoint(*source_endpoint)
-        if found is None:
-            self.counters.bump("sid_miss")
-            logger.warning("回程包的源端点 %s 不是本机发布的 L3 服务，丢弃", source_endpoint)
-            return False
-        sid, _service = found
+        # D21：被动 FTP 数据连接的回程走它控制连接的 SID，先查（不然源端口 p 查不到服务）
+        ftp_sid = self.ftp.return_sid(inner, header) if self.ftp is not None else None
+        if ftp_sid is not None:
+            sid, service = ftp_sid, None
+        else:
+            found = self.state.find_l3_service_for_endpoint(*source_endpoint)
+            if found is None:
+                self.counters.bump("sid_miss")
+                logger.warning("回程包的源端点 %s 不是本机发布的 L3 服务，丢弃", source_endpoint)
+                return False
+            sid, service = found
         self.counters.bump("sid_hit")
 
         # 由内层**目的**地址定消费端（静态 peers[]，不做数据面学习）
@@ -269,6 +316,10 @@ class L3Provider:
                            source_endpoint, consumer_nid)
             return False
 
+        if self.ftp is not None and service is not None and service.app == "ftp" \
+                and source_endpoint[2] == service.port:
+            # D21：控制连接的回复。**发出之前**登记 227/229 的期望，客户端的 SYN 不可能先到
+            self.ftp.on_server_packet(inner, header, sid, service, consumer_nid)
         payload = self._clamped(inner, header)  # SYN-ACK 的 MSS 兜底
         load = bytes([WebMsgType.IP_DOWNSTREAM | LoadFlag.LAST]) + payload
         self.sender.send(tunnel.return_ip, build_data_packet(

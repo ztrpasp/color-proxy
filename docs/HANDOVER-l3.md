@@ -1,7 +1,7 @@
 # 交接文档 —— L3 隧道模式（分支 `dev_tun`）
 
 > 目的：让新会话直接接着做，不必重建上下文。
-> 开场读序：**本文 → `docs/design-l3-v2.md`（契约，rev.7）→ `docs/M4-acceptance.md`**。
+> 开场读序：**本文 → `docs/design-l3-v2.md`（契约，rev.8）→ `docs/M4-acceptance.md`**。
 > v1 的背景见 `docs/HANDOVER.md`。截至 2026-10-23。
 
 ---
@@ -50,7 +50,9 @@ L3 里只能管到 `tcp://172.10.9.2:8000` 整个端口。现在提供端在 `l3
 §8.7，真机用例在 M4 手册 §4c。实现时有一处偏离计划：Upgrade/CONNECT **不**开透传，按普通
 请求准入、升级后的字节被 RST——开透传的话带一个 `Upgrade` 头就能绕过后续请求的检查。
 
-回归基线：**170 项断言 + 3 个脚本式 e2e，全绿**（D20 新增 43 项）。
+**2026-10-23（同日）：被动 FTP 不再需要通配（设计 rev.8，D21）。** 用户提的方案是「解析 229、把端口放进消费端的临时白名单、数据连接复用已有隧道」；评审后定下的做法是：**判定放在提供端**（只改消费端根本不通——提供端的目的准入会把端口 p 丢掉，回程也按源端口 p 查不到 SID），消费端只加一条路由回退。两端在控制端口 21 上标 `app: "ftp"`；提供端读控制连接上的 `PASV`/`EPSV` 与源站的 227/229，在回复下行**之前**登记一次性期望 `(NID, ip, p)`，数据连接**带着控制 SID** 走同一条隧道、不发 GET（继承控制连接的准入，ACL 对 FTP 因此按会话生效）。防绕过的几条：回复只按 CRLF 切行（裸 LF 回显能伪造 229）、按 RFC 959 多行分帧、只认紧跟 PASV/EPSV 的回复、不用 227 里的地址、拒绝 <1024 / 控制端口 / 同地址已发布的端口。`config.json` 的通配 `:0` 已删，`tools/ftp_server.py` 默认不再限被动端口段。新模块 `l7/ftp.py`、`l3/ftp.py`；契约在设计 §8.8，真机步骤在 M4 手册 §2（已重写）。顺带修掉一个隐患：以前控制与数据各走一条 SID，下载超过 800 s 时控制 SID 的 BR ODC 表项过期，最后的 `226` 会被丢。另：装了 Clash 的机器上 curl 会把 `ftp://` 交给 `all_proxy` 里的 HTTP 代理（502），手册里的命令已加 `--noproxy '*'`。
+
+回归基线：**203 项断言 + 3 个脚本式 e2e，全绿**（D21 新增 33 项）。
 
 ---
 
@@ -189,7 +191,7 @@ MSS clamp 都是验证过的**，真机上新增的只有 Wintun 与内核路径
 
 | 用例 | 提供端起什么 | 消费端拿什么测 |
 |---|---|---|
-| 被动 FTP | `python tools/ftp_server.py --make-testfile 10`（需 `pip install pyftpdlib`） | `curl --ftp-pasv`，**主动模式一定不通**（§8.1） |
+| 被动 FTP | `python tools/ftp_server.py --make-testfile 10`（需 `pip install pyftpdlib`；D21 起被动端口不限、不发布） | `curl --noproxy '*' --ftp-pasv`（EPSV）/ 加 `--disable-epsv`（PASV），**主动模式本轮不支持**（§8.8） |
 | 视频流 | `python tools/rtp_video.py --role server --seconds 0` | `python tools/rtp_video.py --role client --server 172.10.9.2 --seconds 300`，自己打丢包率/最长中断 |
 | MySQL | 本机 MySQL，`bind-address=0.0.0.0` + 账号 host 写 `%` | `mysql -h 172.10.9.2 -P 3306` |
 
@@ -273,11 +275,13 @@ MSS clamp 都是验证过的**，真机上新增的只有 Wintun 与内核路径
 ## 6. 怎么跑
 
 ```bash
-# 离线回归（全绿基线：170 项断言 + 3 个脚本）
+# 离线回归（全绿基线：203 项断言 + 3 个脚本）
 PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_m0.py          # 15/15
 PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_dataplane.py   # 28/28  ← 含 D19 的 8 项
 PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_content.py     # 21/21  ← D20 内容级准入
 PYTHONDONTWRITEBYTECODE=1 python tests/test_l7_http.py        # 15/15  ← HTTP 请求流解析
+PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_ftp.py         # 19/19  ← D21 被动 FTP
+PYTHONDONTWRITEBYTECODE=1 python tests/test_l7_ftp.py         # 14/14  ← FTP 命令/回复解析
 PYTHONDONTWRITEBYTECODE=1 python tests/test_tun_tcp.py        #  7/7   ← TCP 段 / RST
 PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_assembly.py    # 13/13  ← 装配层
 PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_acceptance.py  #  8/8   ← M4 离线

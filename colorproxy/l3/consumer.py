@@ -14,9 +14,9 @@ import threading
 from ..consumer.config import ConsumerL3Config
 from ..consumer.messages import build_get, build_l3_upstream, reverse_path_for_ack
 from ..consumer.state import ConsumerState
-from ..protocol.constants import WEB_MSG_TYPE_MASK, WebMsgType
+from ..protocol.constants import NSID_LEN, WEB_MSG_TYPE_MASK, WebMsgType
 from ..protocol.packets import ColorData
-from ..protocol.sid import sid_hex_from_packet
+from ..protocol.sid import lsid_from_service, sid_hex_from_packet
 from ..protocol.utils import verify_checksum
 from ..transport.sender import ColorSender
 from ..tun import ipv4, mss
@@ -70,6 +70,12 @@ class L3Consumer:
             counters=self.counters,
             admit_timeout=self.config.tunnel_timeout_sec,
         ) if http_services else None
+        # D21：FTP 控制端口，地址 → (控制端口, 控制 SID 的 L_sid hex)。发往这个地址、SID 表里
+        # 查不到的端口当作被动数据连接，改走控制 SID；放不放行由提供端按 227/229 判定
+        self._ftp_control: dict[str, tuple[int, str]] = {
+            svc.ip: (svc.port, lsid_from_service(svc.proto, svc.ip, svc.port).hex())
+            for svc in self.config.app_services if svc.app == "ftp"
+        }
 
     # ------------------------------------------------------------ 上行（§7.1）
 
@@ -96,7 +102,9 @@ class L3Consumer:
         self.counters.bump("sid_hit")
 
         payload = self._clamped(inner, header)
-        is_new = self._is_new_connection(inner, header, sid)
+        # D21：被动 FTP 数据连接继承控制连接的准入，不再为它单独发 GET（D19 的例外）
+        is_new = False if self._is_ftp_data(endpoint, sid) \
+            else self._is_new_connection(inner, header, sid)
         if self.content is not None and self.content.watches(endpoint):
             # D20：受管 HTTP 端点的包先过内容级准入门，由它决定转发、扣留还是丢弃；
             # 要转发的仍经下面的 _dispatch_upstream（含 D19）
@@ -187,13 +195,38 @@ class L3Consumer:
         return ipv4.endpoint(inner, header, source=False)
 
     def _lookup_sid(self, endpoint: tuple[str, str, int]) -> str | None:
-        """查流缓存，未命中则拼串算 SHA1 查 SID 表（含 §3.3 两级回退）后写回缓存。"""
+        """查流缓存，未命中则拼串算 SHA1 查 SID 表后写回缓存。
+
+        回退顺序：精确 → 通配（§3.3）→ 该地址的 FTP 控制 SID（D21）。第三级是静态规则
+        （只看地址），所以结果照样可以进流缓存。
+        """
         cached = self.flows.get(endpoint)
         if cached is not None:
             return None if cached == MISS else cached
         sid = self.state.lookup_by_service(*endpoint)
+        if sid is None:
+            sid = self._ftp_control_sid(endpoint)
         self.flows.put(endpoint, sid if sid is not None else MISS)
         return sid
+
+    def _ftp_control_sid(self, endpoint: tuple[str, str, int]) -> str | None:
+        proto, ip, port = endpoint
+        control = self._ftp_control.get(ip)
+        if proto != "tcp" or control is None or port == control[0]:
+            return None
+        return self.state.lookup_by_service(proto, ip, control[0])
+
+    def _is_ftp_data(self, endpoint: tuple[str, str, int], sid: str) -> bool:
+        """这个包是不是借 FTP 控制 SID 走的被动数据连接（D21）。
+
+        精确查表得不到控制 SID（哈希不同），通配得到的是 ``:0`` 的 SID，所以「目的端口不是
+        控制端口、SID 却是控制 SID」只可能来自 ``_ftp_control_sid`` 这一级回退。
+        """
+        if not self._ftp_control:
+            return False
+        control = self._ftp_control.get(endpoint[1])
+        return control is not None and endpoint[2] != control[0] \
+            and sid[NSID_LEN * 2:] == control[1]
 
     def _queue_and_handshake(
         self, sid: str, payload: bytes, endpoint: tuple[str, str, int]

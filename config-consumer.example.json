@@ -26,7 +26,8 @@
       }
     ],
     "app_services": [
-      { "proto": "tcp", "ip": "172.10.9.2", "port": 8000, "app": "http" }
+      { "proto": "tcp", "ip": "172.10.9.2", "port": 8000, "app": "http" },
+      { "proto": "tcp", "ip": "172.10.9.2", "port": 21, "app": "ftp" }
     ],
     "tunnel_timeout_sec": 5.0,
     "firstpkt_queue_pkts": 4,

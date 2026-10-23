@@ -64,6 +64,9 @@ class AppService:
     ``app="http"`` 的端点上每个请求都要先按 URL 过一次准入：消费端解析出请求行，用
     ``SHA1(http://<ip>:<port><path>)`` 查 SID 表并发 GET，回了才放行，否则 RST。
     连接本身仍由服务级 SID 承载，所以提供端照样要发布 ``tcp://<ip>:<port>``。
+
+    ``app="ftp"``（D21）标的是 FTP 控制端口：发往同一地址、SID 表里查不到的端口（被动数据
+    连接）改走这条控制 SID，且不再单独过 D19 的准入——放不放行由提供端按 227/229 判定。
     """
 
     proto: str
@@ -285,6 +288,9 @@ def _load_app_services(entries: list, capture_routes: list[str]) -> tuple[AppSer
             )
         if (proto, ip, port) in seen:
             raise ValueError(f"{where} 重复：{canonical}")
+        if app == "ftp" and any(svc.app == "ftp" and svc.ip == ip for svc in services):
+            # D21：发往这个地址的未知端口回退到 FTP 控制 SID，两个 FTP 就分不清该走哪条
+            raise ValueError(f"{where}：{ip} 上已经有一个 app=ftp 的端点，同一地址只能有一个")
         seen.add((proto, ip, port))
         services.append(AppService(proto=proto, ip=ip, port=port, app=app))
     return tuple(services)
