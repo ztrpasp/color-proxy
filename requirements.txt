@@ -1,6 +1,10 @@
 # 运行依赖
 scapy>=2.5.0
 
+# REST/SSE 演示源站的模型服务（tools/rag_*.py，MySQL 检索）需要；其余页面不需要。
+# DeepSeek 调用只用标准库。见 docs/RESTFUL-L3.md。
+mysql-connector-python>=9.0
+
 # M4 用例一的 FTP 源站（tools/ftp_server.py）需要：
 #   pip install pyftpdlib
 # 用例二的视频流 tools/rtp_video.py 不需要额外依赖；用例三需要本机装 MySQL。

@@ -1,0 +1,6 @@
+# Optional MySQL server tuning for the 16 GB RAM / CPU-only experiment laptop.
+# MySQL's ngram_token_size default is already 2; it is written explicitly for reproducibility.
+[mysqld]
+ngram_token_size=2
+innodb_buffer_pool_size=512M
+max_connections=40

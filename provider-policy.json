@@ -1,0 +1,83 @@
+{
+  "version": "0.3.1-min-p2p3",
+  "default": {
+    "roles": [
+      "public"
+    ],
+    "allowed_sids": [
+      "SID_MED_PUBLIC",
+      "SID_EDU_PUBLIC"
+    ],
+    "export_sids": [
+      "SID_MED_PUBLIC",
+      "SID_EDU_PUBLIC"
+    ]
+  },
+  "users": {
+    "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2": {
+      "roles": [
+        "medical_researcher",
+        "academic_advisor"
+      ],
+      "allowed_sids": [
+        "SID_MED_PUBLIC",
+        "SID_MED_PRIVATE_P2",
+        "SID_EDU_PUBLIC",
+        "SID_EDU_PRIVATE_P2"
+      ],
+      "export_sids": [
+        "SID_MED_PUBLIC",
+        "SID_MED_PRIVATE_P2",
+        "SID_EDU_PUBLIC",
+        "SID_EDU_PRIVATE_P2"
+      ]
+    },
+    "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3": {
+      "roles": [
+        "medical_researcher",
+        "academic_advisor",
+        "medical_privileged",
+        "school_privileged"
+      ],
+      "allowed_sids": [
+        "SID_MED_PUBLIC",
+        "SID_MED_PRIVATE_P2",
+        "SID_MED_PRIVATE_P3",
+        "SID_EDU_PUBLIC",
+        "SID_EDU_PRIVATE_P2",
+        "SID_EDU_PRIVATE_P3"
+      ],
+      "export_sids": [
+        "SID_MED_PUBLIC",
+        "SID_MED_PRIVATE_P2",
+        "SID_EDU_PUBLIC",
+        "SID_EDU_PRIVATE_P2"
+      ]
+    },
+    "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4": {
+      "roles": [
+        "medical_researcher",
+        "academic_advisor",
+        "medical_privileged",
+        "school_privileged",
+        "export_privileged"
+      ],
+      "allowed_sids": [
+        "SID_MED_PUBLIC",
+        "SID_MED_PRIVATE_P2",
+        "SID_MED_PRIVATE_P3",
+        "SID_EDU_PUBLIC",
+        "SID_EDU_PRIVATE_P2",
+        "SID_EDU_PRIVATE_P3"
+      ],
+      "export_sids": [
+        "SID_MED_PUBLIC",
+        "SID_MED_PRIVATE_P2",
+        "SID_MED_PRIVATE_P3",
+        "SID_EDU_PUBLIC",
+        "SID_EDU_PRIVATE_P2",
+        "SID_EDU_PRIVATE_P3"
+      ]
+    }
+  }
+}
