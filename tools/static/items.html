@@ -1,175 +1,25 @@
 <!doctype html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CoLoR Proxy · /api/items 交互控制台</title>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>REST Items Console</title>
 <style>
-  :root{
-    --bg:#0b1021; --panel:#141a33; --panel2:#10162c; --line:#26304f;
-    --ink:#e8ecff; --muted:#9aa6d4; --brand:#6ea8ff; --brand2:#9b7bff;
-    --ok:#46e0a8; --warn:#ffd166; --danger:#ff7a93;
-    --mono:ui-monospace,SFMono-Regular,"Cascadia Code",Consolas,monospace;
-  }
-  *{box-sizing:border-box}
-  body{margin:0; color:var(--ink); background:
-      radial-gradient(1200px 600px at 15% -10%, #1b2547 0, transparent 60%),
-      radial-gradient(900px 500px at 110% 10%, #2a1c4a 0, transparent 55%), var(--bg);
-    font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;}
-  .wrap{max-width:960px; margin:0 auto; padding:40px 24px 64px}
-  a{color:var(--brand); text-decoration:none}
-  .badge{display:inline-flex; gap:8px; align-items:center; padding:6px 14px; border:1px solid var(--line);
-    border-radius:999px; color:var(--muted); font-size:13px; background:rgba(255,255,255,.02)}
-  .dot{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 12px var(--ok)}
-  h1{font-size:clamp(26px,4.5vw,40px); line-height:1.1; margin:18px 0 8px; letter-spacing:-.02em}
-  h1 .grad{background:linear-gradient(100deg,var(--brand),var(--brand2));-webkit-background-clip:text;
-    background-clip:text; color:transparent}
-  .lead{color:var(--muted); max-width:640px}
-  .panel{background:linear-gradient(180deg,var(--panel),var(--panel2)); border:1px solid var(--line);
-    border-radius:16px; padding:22px; margin:22px 0}
-  .panel h2{margin:0 0 14px; font-size:18px}
-  .row{display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end}
-  label{display:block; font-size:12px; color:var(--muted); margin:0 0 6px}
-  input{width:100%; background:#0c1226; color:var(--ink); border:1px solid var(--line);
-    border-radius:10px; padding:10px 12px; font:inherit; font-size:14px}
-  input:focus{outline:none; border-color:var(--brand)}
-  .field{flex:1 1 200px}
-  button{cursor:pointer; border:1px solid transparent; border-radius:10px; padding:10px 16px;
-    font:inherit; font-weight:600; font-size:14px; color:#0b1021;
-    background:linear-gradient(100deg,var(--brand),var(--brand2))}
-  button.ghost{background:transparent; color:var(--ink); border-color:var(--line)}
-  button.warn{background:var(--warn)} button.danger{background:var(--danger); color:#1a0410}
-  button:active{transform:translateY(1px)}
-  .items{display:grid; gap:12px}
-  .item{display:grid; grid-template-columns:64px 1fr 1fr auto; gap:12px; align-items:end;
-    background:#0e1429; border:1px solid var(--line); border-radius:12px; padding:14px}
-  .item .id{font-family:var(--mono); font-weight:700; color:var(--brand); align-self:center}
-  .item .acts{display:flex; gap:8px}
-  .empty{color:var(--muted); font-size:14px; padding:8px 0}
-  .log{font-family:var(--mono); font-size:12.5px; background:#0a0f20; border:1px solid var(--line);
-    border-radius:12px; padding:14px; max-height:240px; overflow:auto; margin:0}
-  .log div{padding:2px 0; white-space:pre-wrap; word-break:break-all}
-  .m{font-weight:700} .m.GET{color:var(--brand)} .m.POST{color:var(--ok)}
-  .m.PUT{color:var(--warn)} .m.DELETE{color:var(--danger)}
-  .st-2{color:var(--ok)} .st-4,.st-5{color:var(--danger)}
-  .hint{color:var(--muted); font-size:13px; margin:8px 0 0}
-  @media(max-width:640px){.item{grid-template-columns:1fr 1fr; }.item .id{grid-column:1/-1}.item .acts{grid-column:1/-1}}
-</style>
-</head>
-<body>
-<div class="wrap">
-  <span class="badge"><span class="dot"></span> 增删改查实时打到源站 <code>/api/items</code></span>
-  <h1><span class="grad">/api/items</span> 交互控制台</h1>
-  <p class="lead">填表单 → 页面即时更新。每个操作都是一次经 CoLoR 代理的真实 HTTP 请求；
-    条目 id 走 <code>?id=N</code>（不入 SID、原样透传）。本页内联全部 CSS/JS，<strong>零外链</strong>。</p>
-
-  <div class="panel">
-    <h2>新建条目（POST /api/items）</h2>
-    <div class="row">
-      <div class="field"><label for="name">名称 name</label><input id="name" placeholder="例如 alpha"></div>
-      <div class="field"><label for="note">备注 note</label><input id="note" placeholder="可选"></div>
-      <button id="create">创建</button>
-    </div>
-    <p class="hint">提示：v1 无请求分片，请求需单包装下（~1.3KB 内），表单数据很小、无压力。</p>
-  </div>
-
-  <div class="panel">
-    <div class="row" style="justify-content:space-between">
-      <h2 style="margin:0">条目列表（GET /api/items）</h2>
-      <button class="ghost" id="refresh">刷新</button>
-    </div>
-    <div id="items" class="items"></div>
-  </div>
-
-  <div class="panel">
-    <h2>请求日志</h2>
-    <pre id="log" class="log"></pre>
-  </div>
-
-  <p class="hint"><a href="/showcase.html">← 返回展示页 showcase.html</a></p>
-</div>
-
+:root{--ink:#142337;--muted:#66778b;--line:#dce4ec;--bg:#f5f7f9;--panel:#fff;--navy:#0c2e4d;--blue:#146eb4;--green:#16845b;--red:#b83b45;--amber:#a36500;--r:16px;--shadow:0 16px 36px rgba(28,52,78,.08)}*{box-sizing:border-box}body{margin:0;font:14px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--ink)}button,input,textarea{font:inherit}.app{min-height:100vh;display:grid;grid-template-columns:230px 1fr}.side{background:linear-gradient(180deg,#0b2945,#0d3558);color:#fff;padding:26px 20px;position:relative}.brand{font-weight:850;font-size:16px;letter-spacing:.01em}.brand small{display:block;color:#9dbbd0;font-weight:500;margin-top:4px}.nav{margin-top:32px;display:grid;gap:6px}.nav a{color:#c8d9e7;text-decoration:none;padding:10px 12px;border-radius:9px}.nav a.active,.nav a:hover{background:rgba(255,255,255,.09);color:#fff}.side-note{position:absolute;bottom:22px;left:20px;right:20px;padding:13px;border:1px solid rgba(255,255,255,.12);border-radius:11px;color:#adc6d8;font-size:12px}.main{padding:30px;max-width:1240px;width:100%}.top{display:flex;justify-content:space-between;align-items:flex-start;gap:18px}.top h1{margin:0;font-size:28px;letter-spacing:-.025em}.top p{margin:6px 0 0;color:var(--muted)}.status{display:flex;align-items:center;gap:7px;background:#eef8f3;color:var(--green);padding:7px 10px;border-radius:999px;font-size:12px;font-weight:800}.status i{width:7px;height:7px;border-radius:50%;background:currentColor}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:24px 0}.stat{background:#fff;border:1px solid var(--line);border-radius:13px;padding:15px 17px}.stat span{display:block;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.08em}.stat b{font-size:22px;display:block;margin-top:4px}.grid{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(300px,.55fr);gap:18px}.panel{background:#fff;border:1px solid var(--line);border-radius:var(--r);box-shadow:0 8px 24px rgba(31,53,77,.04)}.panel-head{padding:18px 20px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}.panel-head h2{font-size:15px;margin:0}.panel-head small{color:var(--muted)}.toolbar{padding:15px 20px;display:flex;gap:8px;border-bottom:1px solid #edf1f4}.btn{border:1px solid var(--line);background:#fff;color:var(--ink);border-radius:9px;padding:8px 11px;font-weight:750;cursor:pointer}.btn.primary{background:var(--blue);border-color:var(--blue);color:#fff}.btn.danger{color:var(--red);border-color:#efcbd0;background:#fff8f8}.btn:hover{filter:brightness(.98)}.table-wrap{overflow:auto;min-height:290px}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:13px 20px;border-bottom:1px solid #edf1f4;vertical-align:top}th{font-size:11px;color:#7a8999;text-transform:uppercase;letter-spacing:.08em;background:#fbfcfd}td code{font:12px ui-monospace,SFMono-Regular,Consolas,monospace;background:#f2f5f8;padding:3px 5px;border-radius:5px}.empty{text-align:center;padding:56px 20px;color:var(--muted)}.form{padding:20px;display:grid;gap:13px}.field label{font-size:12px;color:#526174;font-weight:750;display:block;margin-bottom:6px}.field input,.field textarea{width:100%;border:1px solid #cfd9e3;border-radius:9px;padding:10px 11px;outline:none;background:#fff}.field input:focus,.field textarea:focus{border-color:#6ca8d8;box-shadow:0 0 0 3px rgba(20,110,180,.09)}.field textarea{min-height:92px;resize:vertical}.hint{font-size:11px;color:var(--muted)}.actions{display:flex;gap:8px}.log{margin-top:18px;background:#0f1f2e;color:#bcd0df;border-radius:16px;overflow:hidden}.log-head{padding:13px 17px;border-bottom:1px solid rgba(255,255,255,.08);display:flex;justify-content:space-between;align-items:center}.log-head strong{font-size:13px}.log-head button{background:none;border:0;color:#87a8be;cursor:pointer}.entries{height:185px;overflow:auto;padding:10px 0;font:12px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace}.entry{display:grid;grid-template-columns:74px 58px 1fr auto;gap:8px;padding:5px 17px}.entry .method{font-weight:800;color:#7fd0d4}.entry .ok{color:#7fd49e}.entry .bad{color:#ff9ba6}.foot{color:#8794a2;font-size:11px;margin-top:16px}.toast{position:fixed;right:22px;bottom:22px;background:#142b3e;color:#fff;padding:11px 14px;border-radius:10px;box-shadow:var(--shadow);opacity:0;transform:translateY(8px);pointer-events:none;transition:.18s}.toast.show{opacity:1;transform:none}
+@media(max-width:900px){.app{grid-template-columns:1fr}.side{position:static}.side-note{display:none}.nav{display:flex;flex-wrap:wrap;margin-top:18px}.main{padding:20px}.grid{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,1fr)}}
+</style></head><body><div class="app"><aside class="side"><div class="brand">CoLoR REST Console<small>API interaction surface</small></div><nav class="nav"><a href="/showcase.html">Overview</a><a class="active" href="/items.html">Items API</a><a href="/monitor.html">Traffic Monitor</a><a href="/model.html">Model Service</a></nav><div class="side-note">资源路径固定为 <b>/api/items</b>，对象 ID 通过 query 传递，用于演示“query 不参与 SID、仍原样透传”。</div></aside>
+<main class="main"><header class="top"><div><h1>Items API</h1><p>一个紧凑的 RESTful CRUD 演示面板。所有操作都会真的发出 HTTP 请求。</p></div><span class="status"><i></i> Origin reachable</span></header>
+<section class="stats"><div class="stat"><span>Resource</span><b>/api/items</b></div><div class="stat"><span>Objects</span><b id="count">0</b></div><div class="stat"><span>Last method</span><b id="lastMethod">—</b></div><div class="stat"><span>Last latency</span><b id="lastLatency">—</b></div></section>
+<div class="grid"><section class="panel"><div class="panel-head"><div><h2>Resource collection</h2><small>GET /api/items</small></div><button class="btn" onclick="loadItems()">刷新</button></div><div class="table-wrap" id="tableWrap"><div class="empty">尚无条目。右侧创建一条记录开始演示。</div></div></section>
+<section class="panel"><div class="panel-head"><div><h2 id="formTitle">Create item</h2><small>POST /api/items</small></div></div><form class="form" onsubmit="submitItem(event)"><input type="hidden" id="itemId"><div class="field"><label>名称</label><input id="name" required placeholder="例如：AQ Service"></div><div class="field"><label>状态</label><input id="state" value="ACTIVE" placeholder="ACTIVE"></div><div class="field"><label>说明</label><textarea id="note" placeholder="用于演示的业务字段"></textarea></div><div class="hint">编辑时使用 <code>PUT /api/items?id=N</code>；删除使用 DELETE。</div><div class="actions"><button class="btn primary" type="submit" id="saveBtn">创建</button><button class="btn" type="button" onclick="resetForm()">清空</button></div></form></section></div>
+<section class="log"><div class="log-head"><strong>HTTP request log</strong><button onclick="document.getElementById('entries').innerHTML=''">clear</button></div><div class="entries" id="entries"></div></section><div class="foot">页面、脚本和样式均内联；经 L3 隧道访问时无需加载任何外部静态资源。</div></main></div><div class="toast" id="toast"></div>
 <script>
-(function(){
-  "use strict";
-  var API = "/api/items";
-  var logEl = document.getElementById("log");
-  var itemsEl = document.getElementById("items");
-
-  function log(method, url, status, data){
-    var line = document.createElement("div");
-    var stClass = "st-" + String(status).charAt(0);
-    line.innerHTML =
-      '<span class="m '+method+'">'+method+'</span> '+url+
-      ' <span class="'+stClass+'">→ '+status+'</span> '+
-      (typeof data === "string" ? data : JSON.stringify(data));
-    logEl.insertBefore(line, logEl.firstChild);
-  }
-
-  function api(method, url, body){
-    var opt = { method: method, headers: {} };
-    if (body !== undefined){ opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
-    return fetch(url, opt).then(function(res){
-      return res.text().then(function(t){
-        var data; try { data = JSON.parse(t); } catch(e){ data = t; }
-        log(method, url, res.status, data);
-        return { status: res.status, data: data };
-      });
-    }).catch(function(err){ log(method, url, "ERR", String(err)); throw err; });
-  }
-
-  function field(value){
-    var i = document.createElement("input");
-    i.value = (value == null ? "" : String(value));
-    return i;
-  }
-
-  function renderItem(it){
-    var row = document.createElement("div"); row.className = "item";
-    var id = document.createElement("div"); id.className = "id"; id.textContent = "#" + it.id;
-    var nameWrap = document.createElement("div");
-    var nameLbl = document.createElement("label"); nameLbl.textContent = "name";
-    var nameIn = field(it.name); nameWrap.appendChild(nameLbl); nameWrap.appendChild(nameIn);
-    var noteWrap = document.createElement("div");
-    var noteLbl = document.createElement("label"); noteLbl.textContent = "note";
-    var noteIn = field(it.note); noteWrap.appendChild(noteLbl); noteWrap.appendChild(noteIn);
-
-    var acts = document.createElement("div"); acts.className = "acts";
-    var save = document.createElement("button"); save.className = "warn"; save.textContent = "保存";
-    save.onclick = function(){
-      api("PUT", API + "?id=" + it.id, { name: nameIn.value, note: noteIn.value }).then(refresh);
-    };
-    var del = document.createElement("button"); del.className = "danger"; del.textContent = "删除";
-    del.onclick = function(){ api("DELETE", API + "?id=" + it.id).then(refresh); };
-    acts.appendChild(save); acts.appendChild(del);
-
-    row.appendChild(id); row.appendChild(nameWrap); row.appendChild(noteWrap); row.appendChild(acts);
-    return row;
-  }
-
-  function refresh(){
-    return api("GET", API).then(function(r){
-      itemsEl.innerHTML = "";
-      var list = (r.data && r.data.items) || [];
-      if (!list.length){
-        var e = document.createElement("div"); e.className = "empty"; e.textContent = "暂无条目，先在上面创建一个。";
-        itemsEl.appendChild(e); return;
-      }
-      list.forEach(function(it){ itemsEl.appendChild(renderItem(it)); });
-    });
-  }
-
-  document.getElementById("create").onclick = function(){
-    var name = document.getElementById("name");
-    var note = document.getElementById("note");
-    api("POST", API, { name: name.value, note: note.value }).then(function(){
-      name.value = ""; note.value = ""; name.focus(); return refresh();
-    });
-  };
-  document.getElementById("refresh").onclick = refresh;
-
-  refresh();
-})();
-</script>
-</body>
-</html>
+const $=s=>document.querySelector(s);let items=[];
+function toast(t){const n=$('#toast');n.textContent=t;n.classList.add('show');setTimeout(()=>n.classList.remove('show'),1500)}
+function log(method,path,status,ms){$('#lastMethod').textContent=method;$('#lastLatency').textContent=ms.toFixed(1)+' ms';const d=document.createElement('div');d.className='entry';d.innerHTML=`<span>${new Date().toLocaleTimeString()}</span><span class="method">${method}</span><span>${path}</span><span class="${status<400?'ok':'bad'}">${status}</span>`;$('#entries').prepend(d)}
+async function req(path,opt={}){const t=performance.now();let r;try{r=await fetch(path,opt);log(opt.method||'GET',path,r.status,performance.now()-t);const data=await r.json();if(!r.ok)throw new Error(data.error||r.statusText);return data}catch(e){if(!r)log(opt.method||'GET',path,0,performance.now()-t);throw e}}
+async function loadItems(){try{const d=await req('/api/items');items=d.items||[];render()}catch(e){toast('读取失败: '+e.message)}}
+function render(){$('#count').textContent=items.length;const w=$('#tableWrap');if(!items.length){w.innerHTML='<div class="empty">暂无条目。创建后会在这里显示。</div>';return}w.innerHTML=`<table><thead><tr><th>ID</th><th>Name</th><th>State</th><th>Note</th><th>Action</th></tr></thead><tbody>${items.map(x=>`<tr><td><code>${x.id}</code></td><td><b>${esc(x.name||'—')}</b></td><td>${esc(x.state||'—')}</td><td>${esc(x.note||'')}</td><td><button class="btn" onclick="editItem(${x.id})">编辑</button> <button class="btn danger" onclick="delItem(${x.id})">删除</button></td></tr>`).join('')}</tbody></table>`}
+function esc(v){return String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function editItem(id){const x=items.find(v=>v.id===id);if(!x)return;$('#itemId').value=id;$('#name').value=x.name||'';$('#state').value=x.state||'';$('#note').value=x.note||'';$('#formTitle').textContent='Edit item #'+id;$('#saveBtn').textContent='保存'}
+function resetForm(){$('#itemId').value='';$('#name').value='';$('#state').value='ACTIVE';$('#note').value='';$('#formTitle').textContent='Create item';$('#saveBtn').textContent='创建'}
+async function submitItem(e){e.preventDefault();const id=$('#itemId').value;const body=JSON.stringify({name:$('#name').value,state:$('#state').value,note:$('#note').value});const path=id?`/api/items?id=${id}`:'/api/items';try{await req(path,{method:id?'PUT':'POST',headers:{'Content-Type':'application/json'},body});toast(id?'已更新':'已创建');resetForm();loadItems()}catch(e){toast('保存失败: '+e.message)}}
+async function delItem(id){if(!confirm('删除条目 #'+id+'？'))return;try{await req(`/api/items?id=${id}`,{method:'DELETE'});toast('已删除');loadItems()}catch(e){toast('删除失败: '+e.message)}}
+loadItems();
+</script></body></html>

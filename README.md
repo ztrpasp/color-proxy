@@ -85,27 +85,35 @@ python tests/stub_consumer.py     # 桩消费端 + 本地源站，验证服务�
 python tests/test_consumer.py     # 消费端单元测试（GET/ACK 布局、反向路径、SID 表/去 query，8/8）
 python tests/stub_provider.py     # 桩提供端 + 桩 RM，验证消费端业务闭环（浏览器→GET→隧道→ACK→响应→写回）
 python tests/test_e2e_inproc.py   # 进程内贯通两端 + 真实源站（hello / showcase 分片 / CRUD 多方法 + query 透传）
+python tests/test_restful_origin.py  # 演示源站的 L3 适配（身份按 tun 地址、paths 一致、SSE 流式与断开，10/10）
+python tests/test_provider_p2p3.py   # 模型服务的 P2 检索过滤 / P3 出域拦截（unittest，4 项）
 ```
 
 > Windows 控制台若显示中文乱码，加 `PYTHONUTF8=1` 前缀（仅影响日志显示，不影响断言）。
 
-### 测试源站与样例端点
+### 演示源站（REST / SSE）
 
-端到端联调用的测试源站：`python tools/origin_server.py --port 8000`，提供：
+`tools/origin_server.py` 是端到端联调与演示共用的源站（由 color-proxy-restful 迁入，已适配 L3）。
+**经 L3 访问时必须 `--host 0.0.0.0`**；部署、页面与六类测试的做法见 **`docs/RESTFUL-L3.md`**。
+
+```
+python tools/origin_server.py --host 0.0.0.0 --port 8000
+```
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| `GET` | `/hello.html`、`/` | 小页面，单包即传完（最简冒烟） |
-| `GET` | `/showcase.html` | 较大的**自包含**页面（内联 CSS/SVG，约 7 KB / 6 个分片），验证分片重组 |
-| `GET` | `/items.html` | `/api/items` 的**交互控制台**：表单增删改查，页面实时更新（内联 CSS/JS，自包含） |
-| `GET` | `/ping` | `pong` |
-| `GET` | `/api/items` | 列出全部条目；`?id=N` 取单条 / 404 |
-| `POST` | `/api/items` | 读 JSON body 创建，返回 `{id, ...}`（201） |
-| `PUT` | `/api/items?id=N` | 覆盖更新 / 404 |
-| `DELETE` | `/api/items?id=N` | 删除 / 404 |
+| `GET` | `/`、`/hello.html` | 小页面（最简冒烟） |
+| `GET` | `/showcase.html` | 总览与导航 |
+| `GET` | `/items.html` + `/api/items` | REST CRUD 控制台；`GET/POST/PUT/DELETE /api/items`，id 走 `?id=N` |
+| `GET` | `/monitor.html` + `/api/monitor/location-a\|b/recent\|snapshot` | 流量监控 REST（`X-API-Key: monitor-demo-key`） |
+| `GET` | `/realtimemonitor.html` + `/api/monitor/location-a\|b/stream` | 流量监控 SSE，可主动停止（EventSource 用 `?api_key=`） |
+| `GET` | `/model.html` | 医院 / 学校 RAG 大模型（MySQL 检索 + DeepSeek，需先按 `docs/RAG-MYSQL-DEEPSEEK.md` 初始化） |
+| `POST` | `/api/model/medical\|education` | 完整回答（JSON，`X-API-Key: model-demo-key`） |
+| `GET` | `/api/model/medical\|education/stream?q=` | 流式回答（SSE） |
+| `GET` | `/ping`、`/slow`、`/favicon.ico` | 探活 / 分段涓流（验证流式）/ 204 |
 
-浏览器（或经代理）打开 `/items.html` 即可填表单创建、保存、删除条目——每个动作都是一次真实的
-`fetch('/api/items')`（用**相对 URL**，故直连与经代理两种方式都成立），页面随响应即时刷新并打印请求日志。
+全部路由列在源站的 `PUBLISHED_PATHS` 里，且必须与 `config.json` 8000 条目的 `paths` 一致
+（L3 的 D20 会 reset 没发布的 path）；`tests/test_restful_origin.py` 会核对。
 
 条目 id 走 query（`?id=N`）而非路径：因 `L_sid = SHA1(去 query 后 URL)` 是整路径精确匹配，
 放 query 可让增删改查共用 `/api/items` 一条 SID，并端到端验证 **query 不入 SID、却原样透传到源站**。
@@ -116,12 +124,12 @@ curl http://127.0.0.1:8000/showcase.html
 curl -X POST -d '{"name":"a"}' http://127.0.0.1:8000/api/items
 curl -X PUT  -d '{"name":"b"}' "http://127.0.0.1:8000/api/items?id=1"
 curl -X DELETE              "http://127.0.0.1:8000/api/items?id=1"
+curl -N "http://127.0.0.1:8000/api/monitor/location-a/stream?api_key=monitor-demo-key"
 ```
 
-> 经代理访问需先把这些 URL 发布为服务（已在 `config.json` / `config-consumer.json` 预置
-> `showcase.html` 与 `/api/items`）。**自包含约束**：经代理取回的页面不能引用任何外链资源
-> （`<link>`/`<img src>`/`<script src>`/外部字体）——代理只取所请求的这一个 URL，子资源会是
-> 各自独立、未发布的请求。
+> **自包含约束**：页面不能引用任何外链资源（`<link>`/`<img src>`/`<script src>`/外部字体）——
+> 每个子资源都是一个独立的 URL，没发布就取不到。v1（经 `:8910` 代理）只预置了 `config.json`
+> `services[]` 里的四个 URL；新页面只按 L3 发布。
 
 ## 模块结构
 

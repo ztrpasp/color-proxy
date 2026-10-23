@@ -52,7 +52,14 @@ L3 里只能管到 `tcp://172.10.9.2:8000` 整个端口。现在提供端在 `l3
 
 **2026-10-23（同日）：被动 FTP 不再需要通配（设计 rev.8，D21）。** 用户提的方案是「解析 229、把端口放进消费端的临时白名单、数据连接复用已有隧道」；评审后定下的做法是：**判定放在提供端**（只改消费端根本不通——提供端的目的准入会把端口 p 丢掉，回程也按源端口 p 查不到 SID），消费端只加一条路由回退。两端在控制端口 21 上标 `app: "ftp"`；提供端读控制连接上的 `PASV`/`EPSV` 与源站的 227/229，在回复下行**之前**登记一次性期望 `(NID, ip, p)`，数据连接**带着控制 SID** 走同一条隧道、不发 GET（继承控制连接的准入，ACL 对 FTP 因此按会话生效）。防绕过的几条：回复只按 CRLF 切行（裸 LF 回显能伪造 229）、按 RFC 959 多行分帧、只认紧跟 PASV/EPSV 的回复、不用 227 里的地址、拒绝 <1024 / 控制端口 / 同地址已发布的端口。`config.json` 的通配 `:0` 已删，`tools/ftp_server.py` 默认不再限被动端口段。新模块 `l7/ftp.py`、`l3/ftp.py`；契约在设计 §8.8，真机步骤在 M4 手册 §2（已重写）。顺带修掉一个隐患：以前控制与数据各走一条 SID，下载超过 800 s 时控制 SID 的 BR ODC 表项过期，最后的 `226` 会被丢。另：装了 Clash 的机器上 curl 会把 `ftp://` 交给 `all_proxy` 里的 HTTP 代理（502），手册里的命令已加 `--noproxy '*'`。
 
-回归基线：**203 项断言 + 3 个脚本式 e2e，全绿**（D21 新增 33 项）。
+**2026-10-24：REST/SSE 演示服务迁入（只动源站与配置，数据面一行没改）。** 把 color-proxy-restful 的源站与 RAG 后端搬进 `tools/`、`data/`、`sql/`，经 L3 访问 `http://172.10.9.2:8000/...`。L3 下有三处不能照搬：
+- **身份**：提供端不再注入 `X-CoLoR-Requester-NID`，浏览器反而能伪造它。现在源站按 TCP 对端地址（消费端 tun 地址，D14 已校验）查 `l3.peers[]`，请求头一律忽略。
+- **D20**：源站全部 26 个路由（`PUBLISHED_PATHS`）都要写进 `config.json` 的 `paths`，包括 `/favicon.ico`。
+- **SSE**：结束时源站要主动关连接，否则 keep-alive 下浏览器永远等不到流结束。
+
+没有迁移的部分：`STREAM_CANCEL`（关连接即 FIN）、v1 的 HMAC 身份绑定和防重放、`/bulk/*`（留在 perf/bench）。部署与六类测试见 `docs/RESTFUL-L3.md`。
+
+回归基线：**217 项断言 + 3 个脚本式 e2e，全绿**（D21 新增 33 项；演示源站新增 10 项 + P2/P3 的 4 项 unittest）。
 
 ---
 
@@ -275,7 +282,7 @@ MSS clamp 都是验证过的**，真机上新增的只有 Wintun 与内核路径
 ## 6. 怎么跑
 
 ```bash
-# 离线回归（全绿基线：203 项断言 + 3 个脚本）
+# 离线回归（全绿基线：217 项断言 + 3 个脚本）
 PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_m0.py          # 15/15
 PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_dataplane.py   # 28/28  ← 含 D19 的 8 项
 PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_content.py     # 21/21  ← D20 内容级准入
@@ -292,6 +299,8 @@ PYTHONDONTWRITEBYTECODE=1 python tests/test_protocol.py       # 10/10
 PYTHONDONTWRITEBYTECODE=1 python tests/test_consumer.py       #  8/8
 PYTHONDONTWRITEBYTECODE=1 python tests/test_provider.py       #  4/4
 PYTHONDONTWRITEBYTECODE=1 python tests/test_hmac.py           #  4/4
+PYTHONDONTWRITEBYTECODE=1 python tests/test_restful_origin.py # 10/10  ← 演示源站 L3 适配（docs/RESTFUL-L3.md）
+PYTHONDONTWRITEBYTECODE=1 python tests/test_provider_p2p3.py  #  4 项 ← 模型服务 P2/P3（unittest）
 PYTHONDONTWRITEBYTECODE=1 python tests/test_e2e_inproc.py     # 脚本式
 PYTHONDONTWRITEBYTECODE=1 python tests/test_streaming_ttfb.py # 脚本式
 PYTHONDONTWRITEBYTECODE=1 python tools/l3_m1c_loopback.py --dry-run   # 脚本式

@@ -21,24 +21,109 @@
       "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
     },
     {
-      "url": "http://172.10.9.2:8000/hello.html",
+      "url": "http://172.10.9.2:8000/",
       "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
-      "desc": "L3 内容级（D20）：SID 表未就绪时的降级路径，同 l3.static_services"
+      "desc": "L3 内容级（D20）：SID 表未就绪时的降级路径，同 l3.static_services；与 config.json 8000 条目的 paths 一一对应"
+    },
+    {
+      "url": "http://172.10.9.2:8000/hello.html",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://172.10.9.2:8000/favicon.ico",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
     },
     {
       "url": "http://172.10.9.2:8000/showcase.html",
-      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
-      "desc": "L3 内容级（D20）"
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
     },
     {
       "url": "http://172.10.9.2:8000/items.html",
-      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
-      "desc": "L3 内容级（D20）"
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://172.10.9.2:8000/monitor.html",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://172.10.9.2:8000/realtimemonitor.html",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://172.10.9.2:8000/model.html",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://172.10.9.2:8000/ping",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://172.10.9.2:8000/slow",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
     },
     {
       "url": "http://172.10.9.2:8000/api/items",
-      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
-      "desc": "L3 内容级（D20）"
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://172.10.9.2:8000/api/monitor/recent",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://172.10.9.2:8000/api/monitor/snapshot",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://172.10.9.2:8000/api/monitor/stream",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://172.10.9.2:8000/api/monitor/location-a/recent",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://172.10.9.2:8000/api/monitor/location-a/snapshot",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://172.10.9.2:8000/api/monitor/location-a/stream",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://172.10.9.2:8000/api/monitor/location-b/recent",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://172.10.9.2:8000/api/monitor/location-b/snapshot",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://172.10.9.2:8000/api/monitor/location-b/stream",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://172.10.9.2:8000/api/models",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://172.10.9.2:8000/api/model/questions",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://172.10.9.2:8000/api/model/medical",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://172.10.9.2:8000/api/model/medical/stream",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://172.10.9.2:8000/api/model/education",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://172.10.9.2:8000/api/model/education/stream",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
     }
   ],
 

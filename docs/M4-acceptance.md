@@ -489,7 +489,8 @@ curl http://172.10.9.2:8001/
 
 ### 4c.1 准备
 
-- 两端配置用仓库里现成的：`config.json` 的 8000 条目已带 `"app": "http"` 和四条 `paths`，
+- 两端配置用仓库里现成的：`config.json` 的 8000 条目已带 `"app": "http"` 和演示源站的全部 26 条
+  `paths`（与 `tools/origin_server.py` 的 `PUBLISHED_PATHS` 一致，见 `docs/RESTFUL-L3.md`），
   `config-consumer.json` 的 `l3.app_services` 已声明 `172.10.9.2:8000` 是 HTTP。
 - 提供端启动日志里每条 path 有一行「已发布 L3 内容 http://172.10.9.2:8000/... SID=<72 位>」，
   **把 `/items.html` 那条的完整 SID 抄下来**，第 3 步配 ACL 要用。
@@ -527,8 +528,8 @@ curl -v http://172.10.9.2:8000/hello.html http://172.10.9.2:8000/items.html
 
 ### 4c.3 常见坑
 
-- **浏览器测试会多出一次 `http_url_miss`**：浏览器自动请求 `/favicon.ico`，没发布就会被 reset。
-  这是预期行为；想消掉就把 `/favicon.ico` 加进 `paths`。
+- **`/favicon.ico` 已发布**（源站回 204），浏览器打开页面不再多出一次 `http_url_miss`。
+  若换用别的源站，它自动请求的路径（favicon、DevTools 的 `/.well-known/...`）没发布就会被 reset。
 - **路径必须与发布时逐字一致**：`/hello%2Ehtml`、`/./hello.html` 这类写法查不到 SID，会被
   reset。这是刻意的（RM 的 ACL 是黑名单，做归一化就能换个写法绕过，见设计 §8.7）。
 - **不能配 `:8910` 代理**：配了就走 v1。提供端会打一行「收到 L3 内容级 SID 的上行 DATA」的
