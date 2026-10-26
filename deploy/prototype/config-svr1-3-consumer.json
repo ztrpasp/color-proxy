@@ -1,0 +1,191 @@
+{
+  "nid": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+  "ipv4": "172.10.0.2",
+  "rm_ipv4": "172.10.0.5",
+  "proxy_port": 8910,
+  "sids": [
+    {
+      "url": "http://10.10.0.2:8000/hello.html",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://10.10.0.2:8000/showcase.html",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://10.10.0.2:8000/items.html",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://10.10.0.2:8000/api/items",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://10.10.9.2:8000/",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "desc": "L3 内容级（D20）：SID 表未就绪时的降级路径；与提供端 8000 条目的 paths 一一对应"
+    },
+    {
+      "url": "http://10.10.9.2:8000/hello.html",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://10.10.9.2:8000/favicon.ico",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://10.10.9.2:8000/showcase.html",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://10.10.9.2:8000/items.html",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://10.10.9.2:8000/monitor.html",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://10.10.9.2:8000/realtimemonitor.html",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://10.10.9.2:8000/model.html",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://10.10.9.2:8000/ping",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://10.10.9.2:8000/slow",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://10.10.9.2:8000/api/items",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://10.10.9.2:8000/api/monitor/recent",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://10.10.9.2:8000/api/monitor/snapshot",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://10.10.9.2:8000/api/monitor/stream",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://10.10.9.2:8000/api/monitor/location-a/recent",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://10.10.9.2:8000/api/monitor/location-a/snapshot",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://10.10.9.2:8000/api/monitor/location-a/stream",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://10.10.9.2:8000/api/monitor/location-b/recent",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://10.10.9.2:8000/api/monitor/location-b/snapshot",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://10.10.9.2:8000/api/monitor/location-b/stream",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://10.10.9.2:8000/api/models",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://10.10.9.2:8000/api/model/questions",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://10.10.9.2:8000/api/model/medical",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://10.10.9.2:8000/api/model/medical/stream",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://10.10.9.2:8000/api/model/education",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+      "url": "http://10.10.9.2:8000/api/model/education/stream",
+      "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    }
+  ],
+  "l3": {
+    "enabled": true,
+    "tun_name": "color0",
+    "tun_ip": "10.99.1.1",
+    "tun_mask": "255.255.255.0",
+    "tun_mtu": 1280,
+    "mss_clamp": 1240,
+    "capture_routes": [
+      "10.10.9.2/32"
+    ],
+    "static_services": [
+      {
+        "proto": "tcp",
+        "ip": "10.10.9.2",
+        "port": 8000,
+        "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+        "desc": "REST/SSE 演示源站 tools/origin_server.py：SID 表未就绪时的降级路径（设计 §9.2）"
+      },
+      {
+        "proto": "tcp",
+        "ip": "10.10.9.2",
+        "port": 21,
+        "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+        "desc": "FTP 控制：SID 表未就绪时的降级路径（设计 §9.2）"
+      },
+      {
+        "proto": "tcp",
+        "ip": "10.10.9.2",
+        "port": 3306,
+        "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+        "desc": "MySQL：SID 表未就绪时的降级路径（设计 §9.2）"
+      },
+      {
+        "proto": "udp",
+        "ip": "10.10.9.2",
+        "port": 5004,
+        "provider_nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+        "desc": "RTP 视频：SID 表未就绪时的降级路径（设计 §9.2）"
+      }
+    ],
+    "app_services": [
+      {
+        "proto": "tcp",
+        "ip": "10.10.9.2",
+        "port": 8000,
+        "app": "http"
+      },
+      {
+        "proto": "tcp",
+        "ip": "10.10.9.2",
+        "port": 21,
+        "app": "ftp"
+      }
+    ],
+    "tunnel_timeout_sec": 5.0,
+    "firstpkt_queue_pkts": 4,
+    "firstpkt_queue_bytes": 8192,
+    "tunnel_redetect_sec": 0,
+    "get_per_connection": true,
+    "udp_flow_idle_sec": 60,
+    "debug_tunnel_icmp": false
+  }
+}

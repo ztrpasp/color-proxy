@@ -1,0 +1,71 @@
+{
+  "nid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+  "ipv4": "10.10.0.2",
+  "rm_ipv4": "10.10.0.5",
+  "services": [
+    {
+      "url": "http://10.10.0.2:8000/hello.html",
+      "origin_host": "10.10.0.2",
+      "origin_port": 8000
+    },
+    {
+      "url": "http://10.10.0.2:8000/showcase.html",
+      "origin_host": "10.10.0.2",
+      "origin_port": 8000
+    },
+    {
+      "url": "http://10.10.0.2:8000/items.html",
+      "origin_host": "10.10.0.2",
+      "origin_port": 8000
+    },
+    {
+      "url": "http://10.10.0.2:8000/api/items",
+      "origin_host": "10.10.0.2",
+      "origin_port": 8000
+    }
+  ],
+
+  "l3": {
+    "enabled": true,
+    "tun_name": "color0",
+    "tun_ip": "10.10.9.2",
+    "tun_mask": "255.255.255.0",
+    "tun_mtu": 1280,
+    "mss_clamp": 1240,
+    "peer_routes": ["10.99.1.0/24"],
+    "weak_host": true,
+    "tunnel_refresh_sec": 0,
+    "peers": [
+      {
+        "nid": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+        "tun_ip": "10.99.1.1",
+        "desc": "SVR1-3，节点1 二级区 AS2（必须与 config-svr1-3-consumer.json 的 l3.tun_ip 一致）"
+      },
+      {
+        "nid": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+        "tun_ip": "10.99.1.2",
+        "desc": "SVR2-3，节点2 二级区 AS4（必须与 config-svr2-3-consumer.json 的 l3.tun_ip 一致）"
+      }
+    ],
+    "services": [
+      { "proto": "tcp", "ip": "10.10.9.2", "port": 8000,
+        "desc": "REST/SSE 演示源站 tools/origin_server.py（D20：另按 URL 发布内容级 SID；paths 必须与其 PUBLISHED_PATHS 一致）",
+        "app": "http", "paths": [
+          "/", "/hello.html", "/favicon.ico",
+          "/showcase.html", "/items.html", "/monitor.html", "/realtimemonitor.html", "/model.html",
+          "/ping", "/slow",
+          "/api/items",
+          "/api/monitor/recent", "/api/monitor/snapshot", "/api/monitor/stream",
+          "/api/monitor/location-a/recent", "/api/monitor/location-a/snapshot", "/api/monitor/location-a/stream",
+          "/api/monitor/location-b/recent", "/api/monitor/location-b/snapshot", "/api/monitor/location-b/stream",
+          "/api/models", "/api/model/questions",
+          "/api/model/medical", "/api/model/medical/stream",
+          "/api/model/education", "/api/model/education/stream"
+        ] },
+      { "proto": "tcp", "ip": "10.10.9.2", "port": 21, "app": "ftp",
+        "desc": "FTP 控制（D21：被动数据连接跟着这条 SID 走，不发布通配 :0）" },
+      { "proto": "tcp", "ip": "10.10.9.2", "port": 3306, "desc": "MySQL" },
+      { "proto": "udp", "ip": "10.10.9.2", "port": 5004, "desc": "RTP 视频" }
+    ]
+  }
+}
