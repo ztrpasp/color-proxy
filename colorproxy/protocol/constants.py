@@ -32,8 +32,8 @@ class ControlSubtype(IntEnum):
 
     PROXY_REGISTER = 5        # 终端 -> RM：代理注册
     PROXY_REGISTER_REPLY = 6  # RM -> 终端：下发域内 Proxy/BR 信息
-    #: RM -> 终端：新代理加入通知。**载荷布局未经证实**（本仓库无参考实现，
-    #: 技术文档只记载了子类型编号），处理方式见 registration.handle_control。
+    #: RM -> 域内其他终端：新代理加入通知，载荷是新代理的注册载荷原样转发（IP + NID，20 字节）。
+    #: RM 源码里叫 CONTROL_SYN_CONFIG_PROXY，解析见 control.parse_proxy_notify。
     PROXY_NOTIFY = 8
     SID_LIST_UPDATE = 40      # RM -> 终端：下发/更新本域可访问 SID 列表（裸 36B SID 拼接）
 

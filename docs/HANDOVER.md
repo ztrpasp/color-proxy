@@ -60,7 +60,8 @@
     `tests/test_consumer.py:test_tunnel_cross_domain_sets_return_ip_and_reverse_pids`。服务端尾部追加保留位
     （`messages.py build_data_packet`）与参考 DataPkt(B=0/R=1) 一致，无需改。
   - **两个控制面缺口（真实 RM 下可能踩，对照 color-agent-plus/ColorMonitor.py:447-491）**：
-    ① **CONTROL tag=8（新代理通知）未处理**（提供端+消费端共用的 `registration.handle_control` 只认 tag=6）。
+    ① ~~CONTROL tag=8（新代理通知）未处理~~ **【2026-10-28 已实现】**：`control.parse_proxy_notify`，布局见下 §6 第 2 条。以下为原记录：
+    **CONTROL tag=8（新代理通知）未处理**（提供端+消费端共用的 `registration.handle_control` 只认 tag=6）。
        若 RM 仅在注册时同步域内代理表、对后加入者用 tag=8 增量通知，则先注册的一方学不到后注册方的
        NID→IP。症状：提供端日志「无法确定回送地址」、消费端 504。**应急**：两端都起好后重启"先启动的那个"。
     ② ~~本域 SID 表的真实下发可能是 CONTROL tag=40 而非 DATA(r=1)~~ **【已修正】**：经对照参考实现
@@ -103,9 +104,11 @@
 1. **scapy `Flags` 共享状态坑**：`pkt.Flags.X = True` 会**跨实例共享同一可变标志对象**，
    造成标志位互相污染。**必须构造时整体赋整数** `ColorData(Flags=0x22, ...)`。
    DATA 位：`S=0x02 R=0x20 B=0x40`。（`tests/test_protocol.py` 有回归断言守护。）
-2. **CONTROL 同步表字段次序**：Subtype=6 的 Proxy 条目是 **NID 在前、IP 在后**，
-   与注册请求(Subtype=5)的 `IP 在前、NID 在后`相反 → 不能用 scapy 的 `IP_NID/ASInfo` 解析，
-   已在 `protocol/control.py` 手工解析。
+2. **CONTROL 同步表字段次序**：Subtype=6 的 Proxy 条目是 **IP 在前、NID 在后**，与注册请求(Subtype=5)相同；
+   Subtype=8 是新代理的注册载荷原样转发（IP+NID 共 20 字节，没有条目数）。依据是三份 RM 源码的 `src/packets/ctrl.c`
+   （注释写着 `[NID IP]`，与代码相反）。**2026-10-28 勘误**：此处原写「NID 在前」，是照抄 color-agent-plus
+   `ProxyLib.ControlPkt` 的错误，导致同域回址在两端都查不到；它自己的 scapy 定义 `IP_NID` 反而是对的。
+   解析见 `protocol/control.py`。
 3. **DATA 校验和只覆盖包头** `data[0:Header_Length]`；GET/ANN/CONTROL 覆盖整包。
 4. **`ColorData` 两处修正**（已做，勿回退）：B=1 时 `Source_NID`（第二个 NID）出现；`post_build` 回填 `PID_Pointer`。
 5. **字节序**：长度/SegID/PID/MTU/控制长度/控制 IP 为小端；校验和大端；NID/SID 字节数组。

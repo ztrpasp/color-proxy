@@ -46,12 +46,17 @@ def _build_control(subtype: int, body: bytes) -> bytes:
 
 
 def _proxy_table_body(extra: bytes = b"") -> bytes:
-    """一个代理 + 一个 BR 的表布局（与 tag=6 相同）；``extra`` 用于制造多余字节。"""
+    """tag=6 的负载：一个代理（IP 在前、NID 在后）+ 一个 BR；``extra`` 追加在末尾。"""
     return (
-        bytes([1]) + int_to_bytes_be(PROXY_NID, 16) + ipv4_to_le_bytes(PROXY_IP)
+        bytes([1]) + ipv4_to_le_bytes(PROXY_IP) + int_to_bytes_be(PROXY_NID, 16)
         + bytes([1]) + int_to_bytes_le(BR_PX, 2) + ipv4_to_le_bytes(BR_IP)
         + extra
     )
+
+
+def _proxy_notify_body() -> bytes:
+    """tag=8 的负载：新代理的注册载荷原样转发，IP + NID 共 20 字节、没有条目数。"""
+    return ipv4_to_le_bytes(PROXY_IP) + int_to_bytes_be(PROXY_NID, 16)
 
 
 class _StateStub:
@@ -87,10 +92,40 @@ class _SenderStub:
             return len(self.sent)
 
 
-# ---------------------------------------------------------------- §9.3 第 4 条：tag=8
+# --------------------------------------------- tag=6 / tag=8 的代理条目：IP 在前、NID 在后
+
+def test_register_reply_matches_rm_byte_layout() -> None:
+    """逐字节写死 RM ctrl.c 的输出，不经过本文件的辅助函数，防止两边一起写错。
+
+    RM 先写 ``*(uint32_t *)pt = ip_addr``（x86 上即小端），再 ``rte_memcpy(pt + 4, nid, 16)``。
+    2026-10-28 前按 NID 在前解析，会把 10.10.0.2 / a1… 读成 NID=02000a0aa1…、IP=161.161.161.161。
+    """
+    body = bytes.fromhex(
+        "02"                                         # 2 个代理
+        "02000a0a" + "a1" * 16 +                     # 10.10.0.2, NID a1…a1
+        "03000a0a" + "b2" * 16 +                     # 10.10.0.3, NID b2…b2
+        "01"                                         # 1 个 BR
+        "0010" "01000a0a"                            # PX 0x1000, 10.10.0.1
+    )
+    proxies, brs = control.parse_register_reply(
+        _build_control(ControlSubtype.PROXY_REGISTER_REPLY, body))
+    assert proxies == [(int("a1" * 16, 16), "10.10.0.2"), (int("b2" * 16, 16), "10.10.0.3")]
+    assert brs == [(0x1000, "10.10.0.1")]
+
+
+def test_parse_register_reply_rejects_count_beyond_length() -> None:
+    """条目数比实际负载多时抛错，不把越界读到的字节当成表项。"""
+    truncated = bytes([2]) + ipv4_to_le_bytes(PROXY_IP) + int_to_bytes_be(PROXY_NID, 16)
+    try:
+        control.parse_register_reply(
+            _build_control(ControlSubtype.PROXY_REGISTER_REPLY, truncated))
+    except ValueError:
+        return
+    raise AssertionError("条目数超出 Data_Length 未被拒绝")
+
 
 def test_is_proxy_notify_discriminates_subtype_and_checksum() -> None:
-    notify = _build_control(ControlSubtype.PROXY_NOTIFY, _proxy_table_body())
+    notify = _build_control(ControlSubtype.PROXY_NOTIFY, _proxy_notify_body())
     assert control.is_proxy_notify(notify)
     # tag=6 不应被当成 tag=8，反之亦然
     assert not control.is_register_reply(notify)
@@ -100,38 +135,46 @@ def test_is_proxy_notify_discriminates_subtype_and_checksum() -> None:
     assert not control.is_proxy_notify(notify[:-1] + bytes([notify[-1] ^ 0xFF]))
 
 
-def test_parse_proxy_table_strict_accepts_wellformed_layout() -> None:
-    notify = _build_control(ControlSubtype.PROXY_NOTIFY, _proxy_table_body())
-    proxies, brs = control.parse_proxy_table_strict(notify)
-    assert proxies == [(PROXY_NID, PROXY_IP)]
-    assert brs == [(BR_PX, BR_IP)]
+def test_parse_proxy_notify_matches_rm_byte_layout() -> None:
+    """tag=8 是注册载荷原样转发：IP(4 字节小端) + NID(16 字节)，没有条目数。"""
+    notify = _build_control(ControlSubtype.PROXY_NOTIFY,
+                            bytes.fromhex("03000a0a" + "b2" * 16))
+    assert control.parse_proxy_notify(notify) == (int("b2" * 16, 16), "10.10.0.3")
 
 
-def test_parse_proxy_table_strict_rejects_unconsumed_bytes() -> None:
-    """布局不匹配必须抛错，绝不能把乱码当 NID→IP 写进表（回址会错得很难查）。"""
-    notify = _build_control(ControlSubtype.PROXY_NOTIFY, _proxy_table_body(b"\xff\xff"))
-    try:
-        control.parse_proxy_table_strict(notify)
-    except ValueError:
-        return
-    raise AssertionError("多余字节未被拒绝")
+def test_parse_proxy_notify_is_registration_payload() -> None:
+    """RM 转发的正是我们自己发出的注册载荷，两者必须能互相还原。"""
+    register = control.build_register(PROXY_NID, PROXY_IP)
+    notify = _build_control(ControlSubtype.PROXY_NOTIFY,
+                            register[control.CONTROL_HEADER_LENGTH:])
+    assert control.parse_proxy_notify(notify) == (PROXY_NID, PROXY_IP)
+
+
+def test_parse_proxy_notify_rejects_wrong_length() -> None:
+    """长度不是 20 就抛错（例如误把 tag=6 的表格式发成 tag=8）。"""
+    for body in (_proxy_notify_body() + b"\x00", _proxy_table_body()):
+        try:
+            control.parse_proxy_notify(_build_control(ControlSubtype.PROXY_NOTIFY, body))
+        except ValueError:
+            continue
+        raise AssertionError(f"{len(body)} 字节的 tag=8 负载未被拒绝")
 
 
 def test_handle_control_learns_from_proxy_notify() -> None:
     state = _StateStub()
     registration.handle_control(
-        state, _build_control(ControlSubtype.PROXY_NOTIFY, _proxy_table_body())
+        state, _build_control(ControlSubtype.PROXY_NOTIFY, _proxy_notify_body())
     )
-    assert state.domain_calls == [([(PROXY_NID, PROXY_IP)], [(BR_PX, BR_IP)])]
+    assert state.domain_calls == [([(PROXY_NID, PROXY_IP)], [])]
     # tag=8 不是注册应答，不应把 registered 置上
     assert not state.registered.is_set()
 
 
-def test_handle_control_ignores_unparsable_proxy_notify() -> None:
-    """布局与 tag=6 不符时只记日志、不改表（载荷布局未经证实，宁可学不到）。"""
+def test_handle_control_ignores_malformed_proxy_notify() -> None:
+    """长度不符时只记日志、不改表：宁可学不到，也不把乱码写进回址表。"""
     state = _StateStub()
     registration.handle_control(
-        state, _build_control(ControlSubtype.PROXY_NOTIFY, _proxy_table_body(b"\xff\xff"))
+        state, _build_control(ControlSubtype.PROXY_NOTIFY, _proxy_table_body())
     )
     assert state.domain_calls == []
 
@@ -143,6 +186,32 @@ def test_handle_control_still_handles_register_reply() -> None:
     )
     assert state.domain_calls == [([(PROXY_NID, PROXY_IP)], [(BR_PX, BR_IP)])]
     assert state.registered.is_set()
+
+
+def test_handle_control_does_not_register_on_malformed_reply() -> None:
+    """tag=6 解析失败不能置 registered，否则注册线程停止重试、表却是空的。"""
+    state = _StateStub()
+    truncated = bytes([2]) + ipv4_to_le_bytes(PROXY_IP) + int_to_bytes_be(PROXY_NID, 16)
+    registration.handle_control(
+        state, _build_control(ControlSubtype.PROXY_REGISTER_REPLY, truncated))
+    assert state.domain_calls == []
+    assert not state.registered.is_set()
+
+
+def test_provider_resolves_same_domain_return_ip_from_reply() -> None:
+    """端到端：tag=6 → ProviderState → 同域 GET（无 PID）能查到消费端的回址。"""
+    state = ProviderState(Config(nid=0xA1, ipv4="10.10.0.2", rm_ipv4="10.10.0.5", services=[]))
+    body = (bytes([2])
+            + ipv4_to_le_bytes("10.10.0.2") + int_to_bytes_be(0xA1, 16)    # 自己，应被过滤
+            + ipv4_to_le_bytes("10.10.0.3") + int_to_bytes_be(0xB2, 16)
+            + bytes([0]))
+    registration.handle_control(state, _build_control(ControlSubtype.PROXY_REGISTER_REPLY, body))
+    assert state.resolve_return_ip(0xB2, []) == "10.10.0.3"
+    assert state.resolve_return_ip(0xA1, []) is None
+    # 后来的同域代理经 tag=8 学到
+    registration.handle_control(state, _build_control(
+        ControlSubtype.PROXY_NOTIFY, ipv4_to_le_bytes("10.10.0.4") + int_to_bytes_be(0xC3, 16)))
+    assert state.resolve_return_ip(0xC3, []) == "10.10.0.4"
 
 
 # ------------------------------------------------- 注册次数（2026-09-21 真机修正）

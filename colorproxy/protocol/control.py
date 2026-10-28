@@ -3,11 +3,21 @@
 实现本项目需要的子类型：
 - 注册请求（Subtype=5）：终端 -> RM
 - 域内同步（Subtype=6）：RM -> 终端，下发 Proxy/BR 信息
+- 新代理通知（Subtype=8）：RM -> 域内其他终端，转发新注册代理的 IP/NID
 - SID 列表（Subtype=40）：RM -> 终端，下发本域可访问 SID 列表（消费端用）
 
-不复用 packets.py 中的声明式定义，因为 RM 同步表中条目的字段次序
-（NID 在前、IP 在后）与请求报文的 IP_NID 次序不一致，手工编解码更清晰可靠。
-报文布局对照 color-agent-plus 的 ProxyLib.ControlPkt（tag=40 见 ColorMonitor.py:480-494）。
+**代理条目一律是 IP 在前、NID 在后**，与注册请求（Subtype=5）的载荷相同。依据是 RM 源码
+``src/packets/ctrl.c``：the-new-rm-master、the-rm-server、the-rm-server-web 三个版本都先写
+``ip_addr`` 再写 ``nid``。那段代码上方的注释写着 ``[NID IP]``，与代码相反，以代码为准。
+tag=8 是 RM 把新代理的注册载荷原样转发，所以布局也一样。
+
+2026-10-28 之前，这里照抄了 color-agent-plus 的 ``ProxyLib.ControlPkt``，按 NID 在前解析。
+结果同域回址在两端都查不到；跨域只用 BR 表，没有受影响。color-agent-plus 自己的 scapy 定义
+``CoLoRpacket.IP_NID`` 其实是对的，只是没被用来填表。
+
+仍然手工编解码而不用 scapy：tag=6 是「条目数 + 两张变长表」的结构，校验前还要按自述长度
+截掉以太网填充（见 ``trim_to_declared_length``）。tag=40 的布局见 color-agent-plus 的
+ColorMonitor.py:480-494。
 """
 from __future__ import annotations
 
@@ -22,6 +32,10 @@ from .utils import (
 
 #: 控制报文头部长度（version/type, ttl, checksum(2), header_length, subtype, data_length(2)）
 CONTROL_HEADER_LENGTH = 8
+#: 代理条目 = IP(4 字节小端) + NID(16 字节大端)。tag=6 的每个表项、tag=8 的整个载荷都是它
+PROXY_ENTRY_LENGTH = 4 + NID_LEN
+#: BR 条目 = PX(2 字节小端) + IP(4 字节小端)
+BR_ENTRY_LENGTH = 2 + 4
 
 
 def build_register(nid: int, ipv4: str, ttl: int = 64) -> bytes:
@@ -41,70 +55,78 @@ def build_register(nid: int, ipv4: str, ttl: int = 64) -> bytes:
     return head + int_to_bytes_be(checksum, 2) + after_checksum
 
 
-def parse_register_reply(payload: bytes) -> tuple[list[tuple[int, str]], list[tuple[int, str]]]:
-    """解析 RM 同步报文（Subtype=6），返回 (proxies, brs)。
-
-    - proxies: ``[(nid, ip), ...]``，每条 = NID(16 字节大端) + IP(4 字节小端)
-    - brs:     ``[(px, ip), ...]``，每条 = PX(2 字节小端) + IP(4 字节小端)
-    """
-    pointer = CONTROL_HEADER_LENGTH
-
-    num_proxies = payload[pointer]
-    pointer += 1
-    proxies: list[tuple[int, str]] = []
-    for _ in range(num_proxies):
-        nid = int.from_bytes(payload[pointer : pointer + NID_LEN], "big")
-        pointer += NID_LEN
-        ip = le_bytes_to_ipv4(payload[pointer : pointer + 4])
-        pointer += 4
-        proxies.append((nid, ip))
-
-    num_brs = payload[pointer]
-    pointer += 1
-    brs: list[tuple[int, str]] = []
-    for _ in range(num_brs):
-        px = int.from_bytes(payload[pointer : pointer + 2], "little")
-        pointer += 2
-        ip = le_bytes_to_ipv4(payload[pointer : pointer + 4])
-        pointer += 4
-        brs.append((px, ip))
-
-    return proxies, brs
+def _parse_proxy_entry(payload: bytes, offset: int) -> tuple[int, str]:
+    """从 ``offset`` 处取一个代理条目（IP 在前、NID 在后），返回 ``(nid, ip)``。"""
+    ip = le_bytes_to_ipv4(payload[offset : offset + 4])
+    nid = int.from_bytes(payload[offset + 4 : offset + PROXY_ENTRY_LENGTH], "big")
+    return nid, ip
 
 
-def parse_proxy_table_strict(payload: bytes) -> tuple[list[tuple[int, str]], list[tuple[int, str]]]:
-    """严格解析"代理/BR 表"布局，不匹配即抛 ``ValueError``。
-
-    与 ``parse_register_reply`` 同一布局，但额外要求解析**恰好**消耗
-    ``Data_Length``(bytes 6-7 小端) 个字节。用于处理布局未经证实的子类型
-    （如新代理通知 tag=8）：宁可报错让调用方打印原始字节，也不要把乱码
-    当成 NID→IP 写进表里。
-    """
+def _declared_end(payload: bytes) -> int:
+    """负载结束位置（头长 + ``Data_Length``）。自述长度超出实际收到的字节数时抛 ``ValueError``。"""
     data_length = int.from_bytes(payload[6:8], "little")
     end = CONTROL_HEADER_LENGTH + data_length
     if end > len(payload):
         raise ValueError(f"Data_Length({data_length}) 超出报文实际长度({len(payload)})")
+    return end
 
+
+def _read_count(payload: bytes, pointer: int, end: int, entry_length: int) -> int:
+    """读 ``pointer`` 处的条目数，并确认后面放得下这么多条目。"""
+    if pointer >= end:
+        raise ValueError("负载在条目数字段处提前结束")
+    count = payload[pointer]
+    if pointer + 1 + count * entry_length > end:
+        raise ValueError(f"条目数 {count} 与 Data_Length 不一致")
+    return count
+
+
+def parse_register_reply(payload: bytes) -> tuple[list[tuple[int, str]], list[tuple[int, str]]]:
+    """解析 RM 同步报文（Subtype=6），返回 (proxies, brs)。
+
+    负载 = 代理数(1) + 代理条目 × n + BR 数(1) + BR 条目 × m：
+
+    - proxies: ``[(nid, ip), ...]``，每条 = IP(4 字节小端) + NID(16 字节大端)
+    - brs:     ``[(px, ip), ...]``，每条 = PX(2 字节小端) + IP(4 字节小端)
+
+    条目数与 ``Data_Length`` 对不上时抛 ``ValueError``，不把越界读到的字节当成表项。
+    """
+    end = _declared_end(payload)
     pointer = CONTROL_HEADER_LENGTH
-    entries: list[list[tuple[int, str]]] = []
-    for id_len, byteorder in ((NID_LEN, "big"), (2, "little")):
-        if pointer >= end:
-            raise ValueError("负载在计数字段处提前结束")
-        count = payload[pointer]
-        pointer += 1
-        group: list[tuple[int, str]] = []
-        for _ in range(count):
-            if pointer + id_len + 4 > end:
-                raise ValueError("负载在条目中途结束，条目数与 Data_Length 不一致")
-            ident = int.from_bytes(payload[pointer : pointer + id_len], byteorder)
-            pointer += id_len
-            group.append((ident, le_bytes_to_ipv4(payload[pointer : pointer + 4])))
-            pointer += 4
-        entries.append(group)
 
-    if pointer != end:
-        raise ValueError(f"解析后剩余 {end - pointer} 字节未消耗，布局不匹配")
-    return entries[0], entries[1]
+    num_proxies = _read_count(payload, pointer, end, PROXY_ENTRY_LENGTH)
+    pointer += 1
+    proxies: list[tuple[int, str]] = []
+    for _ in range(num_proxies):
+        proxies.append(_parse_proxy_entry(payload, pointer))
+        pointer += PROXY_ENTRY_LENGTH
+
+    num_brs = _read_count(payload, pointer, end, BR_ENTRY_LENGTH)
+    pointer += 1
+    brs: list[tuple[int, str]] = []
+    for _ in range(num_brs):
+        px = int.from_bytes(payload[pointer : pointer + 2], "little")
+        brs.append((px, le_bytes_to_ipv4(payload[pointer + 2 : pointer + BR_ENTRY_LENGTH])))
+        pointer += BR_ENTRY_LENGTH
+
+    return proxies, brs
+
+
+def parse_proxy_notify(payload: bytes) -> tuple[int, str]:
+    """解析新代理通知（Subtype=8），返回 ``(nid, ip)``。
+
+    有代理来注册时，RM 把那份注册载荷原样转发给域内其他代理（ctrl.c 里的
+    ``CONTROL_SYN_CONFIG_PROXY``）：IP(4 字节小端) + NID(16 字节大端)，共 20 字节，
+    **没有条目数字段**。color-agent-plus 的 ``ProxyLib.ControlPkt`` 也是按这个布局解析的。
+
+    ``Data_Length`` 不是 20 时抛 ``ValueError``：宁可学不到，也不把乱码当成 NID→IP 写进表。
+    """
+    end = _declared_end(payload)
+    if end - CONTROL_HEADER_LENGTH != PROXY_ENTRY_LENGTH:
+        raise ValueError(
+            f"Data_Length 应为 {PROXY_ENTRY_LENGTH}，实为 {end - CONTROL_HEADER_LENGTH}"
+        )
+    return _parse_proxy_entry(payload, CONTROL_HEADER_LENGTH)
 
 
 def trim_to_declared_length(payload: bytes) -> bytes:

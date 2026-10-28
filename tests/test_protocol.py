@@ -147,7 +147,7 @@ def test_control_register_build():
 def test_control_reply_parse():
     body = (
         bytes([1])
-        + int_to_bytes_be(0x1234, 16) + ipv4_to_le_bytes("10.0.1.7")  # 1 proxy
+        + ipv4_to_le_bytes("10.0.1.7") + int_to_bytes_be(0x1234, 16)  # 1 proxy：IP 在前、NID 在后
         + bytes([1])
         + int_to_bytes_le(0x55, 2) + ipv4_to_le_bytes("10.0.0.9")     # 1 BR
     )

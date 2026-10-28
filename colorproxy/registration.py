@@ -184,37 +184,41 @@ _reported_subtypes: set[int] = set()
 def handle_control(state: _RegistrableState, payload: bytes) -> None:
     """处理 CONTROL 报文：RM 同步回复（Subtype=6）与新代理通知（Subtype=8）。
 
-    **tag=8 的载荷布局未经证实**：本仓库没有参考实现，技术文档只记载了子类型编号
-    （`docs/PRD-v1.md §报文类型`）。因此这里按"与 tag=6 相同的代理/BR 表布局"
-    严格尝试解析（RM 大概率复用同一个序列化器），解析不干净就**只打印原始字节、
-    不改动任何表**——把乱码当 NID→IP 写进表会造成回址错误，比学不到更难查。
-    真机上第一次收到时，从日志里的 hex 就能确认布局并补完这个分支。
+    两种报文里的代理条目都是 IP 在前、NID 在后（布局依据见 ``protocol/control.py`` 的
+    模块说明）。tag=6 是注册时一次性下发的全表；tag=8 是之后每有一个新代理注册，RM 就转发
+    一条给域内其他代理。不处理 tag=8 的话，先启动的一方永远学不到后启动的同域代理。
+
+    解析失败时**只打印原始字节、不改动任何表**：把乱码当 NID→IP 写进表会造成回址错误，
+    比学不到更难查。tag=6 解析失败还不会置 ``registered``，注册线程会继续重试。
 
     其余子类型（RM 的保密注册挑战 tag=20/21 等本项目未实现的流程）**每种打一行**
     再忽略：不打的话，"RM 明明回了、终端却一直说没收到"在日志里完全没有痕迹。
     """
     if control.is_register_reply(payload):
-        proxies, brs = control.parse_register_reply(payload)
+        try:
+            proxies, brs = control.parse_register_reply(payload)
+        except ValueError as exc:
+            logger.warning("收到 RM 同步(tag=6) 但条目数与长度不符（%s），已忽略。原始字节：%s",
+                           exc, payload.hex())
+            return
         state.set_domain_info(proxies, brs)
         state.registered.set()
-        logger.info("收到 RM 同步：%d 个域内代理，%d 个边界路由器", len(proxies), len(brs))
+        logger.info(
+            "收到 RM 同步：%d 个域内代理 [%s]，%d 个边界路由器 [%s]",
+            len(proxies), ", ".join(f"{nid:032x}={ip}" for nid, ip in proxies),
+            len(brs), ", ".join(f"PX 0x{px:04x}={ip}" for px, ip in brs),
+        )
         return
 
     if control.is_proxy_notify(payload):
         try:
-            proxies, brs = control.parse_proxy_table_strict(payload)
-        except (ValueError, IndexError) as exc:
-            logger.warning(
-                "收到新代理通知(tag=8) 但布局与 tag=6 不符（%s），已忽略。"
-                "请把这行原始字节反馈以补完解析：%s",
-                exc, payload.hex(),
-            )
+            nid, ip = control.parse_proxy_notify(payload)
+        except ValueError as exc:
+            logger.warning("收到新代理通知(tag=8) 但长度不符（%s），已忽略。原始字节：%s",
+                           exc, payload.hex())
             return
-        state.set_domain_info(proxies, brs)
-        logger.info(
-            "收到新代理通知(tag=8)：%d 个域内代理，%d 个边界路由器（按 tag=6 布局解析）",
-            len(proxies), len(brs),
-        )
+        state.set_domain_info([(nid, ip)], [])
+        logger.info("收到新代理通知(tag=8)：NID=%032x IP=%s", nid, ip)
         return
 
     report_unhandled_control(payload)
