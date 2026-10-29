@@ -9,6 +9,19 @@ import threading
 from dataclasses import dataclass, field
 
 from .config import Config, L3ServiceConfig, ServiceConfig
+from .protocol.strategy import SidLabel
+
+
+@dataclass(frozen=True)
+class AnnouncedSid:
+    """已通告表里的一条：重发 ANN（AM=2 刷新、AM=3 注销）需要的全部内容。
+
+    ``label`` 是发布时裁好的名称与描述，三种通告原样复用它，保证 TLV 完全相同
+    （docs/design-ann-sid-desc.md §6）。
+    """
+
+    lsid: bytes
+    label: SidLabel = SidLabel()
 
 
 @dataclass
@@ -37,9 +50,9 @@ class ProviderState:
         self._pxs: dict[int, str] = {}                  # px -> ip
         self._web_services: dict[str, ServiceConfig] = {}  # sid -> 服务
         self._pending: dict[tuple[str, int], PendingTx] = {}  # (sid, cus_nid) -> 事务
-        #: 已向 RM 发出过 ANN 的服务：sid -> L_sid。两种粒度共用一张表——去重与
-        #: 退出注销只关心"这条 SID 通告过没有"，与它是内容级还是服务级无关。
-        self._announced: dict[str, bytes] = {}
+        #: 已向 RM 发出过 ANN 的服务。两种粒度共用一张表——去重与退出注销只关心
+        #: "这条 SID 通告过没有"，与它是内容级还是服务级无关。
+        self._announced: dict[str, AnnouncedSid] = {}
 
         # -- L3 隧道模式（v2）。两张表与 v1 的 _web_services 并列，模式分派靠
         # "SID 落在哪张表里"判定，不靠 load[0]（docs/design-l3-v2.md §4.1，D13）。
@@ -80,7 +93,11 @@ class ProviderState:
 
     # -- 已通告给 RM 的 SID（ANN 去重 + 退出注销）-----------------------
 
-    def mark_announced(self, sid: str, lsid: bytes) -> bool:
+    def is_announced(self, sid: str) -> bool:
+        with self._lock:
+            return sid in self._announced
+
+    def mark_announced(self, sid: str, lsid: bytes, label: SidLabel = SidLabel()) -> bool:
         """登记一条"已发出 ANN"的 SID。返回 False 表示此前已通告过。
 
         调用方据此跳过重发：真机 RM 对同一条 SID 的第二次 AM=1 会报
@@ -89,11 +106,11 @@ class ProviderState:
         with self._lock:
             if sid in self._announced:
                 return False
-            self._announced[sid] = lsid
+            self._announced[sid] = AnnouncedSid(lsid=lsid, label=label)
             return True
 
-    def announced_services(self) -> list[tuple[str, bytes]]:
-        """已通告的 ``[(sid, lsid), ...]`` 快照（刷新 AM=2 / 注销 AM=3 用）。"""
+    def announced_services(self) -> list[tuple[str, AnnouncedSid]]:
+        """已通告的 ``[(sid, AnnouncedSid), ...]`` 快照（刷新 AM=2 / 注销 AM=3 用）。"""
         with self._lock:
             return list(self._announced.items())
 

@@ -9,7 +9,8 @@
     python tools/rm_withdraw.py [config.json]
 
 需管理员权限（发包走 scapy 二层）。它只发 AM=3，不注册、不监听回复——RM 收没收到
-要看 RM 那边的日志。
+要看 RM 那边的日志。注销报文带着与发布时相同的名称/描述 TLV（docs/design-ann-sid-desc.md §6）：
+RM 不看 AM，不带 TLV 的注销会被当成"策略变了"，把这条 SID 的策略整个清空。
 """
 from __future__ import annotations
 

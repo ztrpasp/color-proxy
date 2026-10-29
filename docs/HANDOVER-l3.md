@@ -59,7 +59,9 @@ L3 里只能管到 `tcp://172.10.9.2:8000` 整个端口。现在提供端在 `l3
 
 没有迁移的部分：`STREAM_CANCEL`（关连接即 FIN）、v1 的 HMAC 身份绑定和防重放、`/bulk/*`（留在 perf/bench）。部署与六类测试见 `docs/RESTFUL-L3.md`。
 
-回归基线：**217 项断言 + 3 个脚本式 e2e，全绿**（D21 新增 33 项；演示源站新增 10 项 + P2/P3 的 4 项 unittest）。
+**2026-10-30：ANN 带上 SID 的名称和描述（`docs/design-ann-sid-desc.md`）。** 每个通告单元多两个策略单元：tag 13 是算 L_SID 时被哈希的那个串（RM 可以校验 `SHA1 == L_SID`），tag 14 是配置里的 `desc`（已精简为 `http`/`ftp`/`mysql`/`rtp`）。两者合计不超过 73 字节，部署里所有 RM 都完成方案 P0 之后才能放宽到 200。裁剪在首次发布时做，结果存进已通告表，AM=2/AM=3 原样复用。新模块 `protocol/strategy.py`，测试 `tests/test_ann_tlv.py`。
+
+回归基线：**236 项断言 + 3 个脚本式 e2e，全绿**（D21 新增 33 项；演示源站新增 10 项 + P2/P3 的 4 项 unittest；tag=8 新代理通知 5 项；ANN 名称/描述 14 项）。
 
 ---
 
@@ -282,7 +284,7 @@ MSS clamp 都是验证过的**，真机上新增的只有 Wintun 与内核路径
 ## 6. 怎么跑
 
 ```bash
-# 离线回归（全绿基线：217 项断言 + 3 个脚本）
+# 离线回归（全绿基线：236 项断言 + 3 个脚本）
 PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_m0.py          # 15/15
 PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_dataplane.py   # 28/28  ← 含 D19 的 8 项
 PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_content.py     # 21/21  ← D20 内容级准入
@@ -294,7 +296,8 @@ PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_assembly.py    # 13/13  ← 装�
 PYTHONDONTWRITEBYTECODE=1 python tests/test_l3_acceptance.py  #  8/8   ← M4 离线
 PYTHONDONTWRITEBYTECODE=1 python tests/test_tun_ipv4_mss.py   # 15/15
 PYTHONDONTWRITEBYTECODE=1 python tests/test_tun_device.py     #  7/7
-PYTHONDONTWRITEBYTECODE=1 python tests/test_registration.py   # 15/15
+PYTHONDONTWRITEBYTECODE=1 python tests/test_registration.py   # 20/20
+PYTHONDONTWRITEBYTECODE=1 python tests/test_ann_tlv.py        # 14/14  ← ANN 名称/描述（tag 13/14）
 PYTHONDONTWRITEBYTECODE=1 python tests/test_protocol.py       # 10/10
 PYTHONDONTWRITEBYTECODE=1 python tests/test_consumer.py       #  8/8
 PYTHONDONTWRITEBYTECODE=1 python tests/test_provider.py       #  4/4

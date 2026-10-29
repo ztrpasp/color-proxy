@@ -26,15 +26,20 @@ from .constants import LSID_LEN, NID_LEN, NSID_LEN
 SERVICE_PROTOCOLS = ("tcp", "udp")
 
 
-def _canonical_for_sid(url: str) -> str:
-    """计算 SID 用的规整 URL：保留 scheme/host/path，去掉 query 与 fragment。"""
+def sid_name_from_url(url: str) -> str:
+    """内容级 SID 的名称：保留 scheme/host/path，去掉 query 与 fragment。
+
+    这就是 ``lsid_from_url`` 哈希的那个串，ANN 里的 SID_NAME（tag 13）原样带它，
+    RM 据此校验 ``SHA1(名称) == L_sid``（docs/design-ann-sid-desc.md §2.2）。
+    服务级的名称是 ``service_canonical`` 的结果。
+    """
     parts = urlsplit(url)
     return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
 
 
 def lsid_from_url(url: str) -> bytes:
     """L_sid = SHA1(去 query/fragment 后的 URL)，返回 20 字节。"""
-    return hashlib.sha1(_canonical_for_sid(url).encode("utf-8")).digest()
+    return hashlib.sha1(sid_name_from_url(url).encode("utf-8")).digest()
 
 
 def service_canonical(proto: str, ipv4: str, port: int) -> str:

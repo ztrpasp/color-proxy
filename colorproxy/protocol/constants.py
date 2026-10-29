@@ -38,6 +38,18 @@ class ControlSubtype(IntEnum):
     SID_LIST_UPDATE = 40      # RM -> 终端：下发/更新本域可访问 SID 列表（裸 36B SID 拼接）
 
 
+#: 通告单元策略单元（TLV）的 tag，见 docs/design-ann-sid-desc.md。1–12 已被 RM 占用
+STRATEGY_SID_NAME = 13  # L_SID 的哈希原文，RM 校验 SHA1(value) == L_SID
+STRATEGY_SID_DESC = 14  # 协议/服务名（http、ftp…），只用于展示
+
+#: 一个通告单元里全部策略单元合计的字节上限（含每个 2 字节 tag/len 头）。
+#: 73 = RM 转发时的单元缓冲 128 − 单元固定部分 55，超了会写坏 RM 的栈（方案 §2.5）。
+#: 部署里**所有** RM 都完成方案 P0 之后才能改成 200（= unit_len 上限 255 − 55）：
+#: ANN 会泛洪到每个域，任何一台没升级的 RM 转发时都会溢出。
+ANN_STRATEGY_BUDGET = 73
+#: desc 超过这个字节数（UTF-8）时配置加载打 warn：它会随 ANN 发给 RM，只该写协议名
+ANN_DESC_WARN_BYTES = 32
+
 # 各标识长度（字节）
 NID_LEN = 16   # 节点标识
 NSID_LEN = 16  # SID 的 NID 部分

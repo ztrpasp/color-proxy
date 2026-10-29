@@ -8,12 +8,16 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
 from .l7 import SUPPORTED_APPS
+from .protocol.constants import ANN_DESC_WARN_BYTES
 from .protocol.sid import content_url, lsid_from_url, service_canonical
+
+logger = logging.getLogger(__name__)
 
 #: L3 段各项的缺省值（对照 docs/design-l3-v2.md §9.1）
 L3_DEFAULT_TUN_NAME = "color0"
@@ -31,6 +35,8 @@ class ServiceConfig:
     url: str
     origin_host: str
     origin_port: int
+    #: 随 ANN 发给 RM 的描述（策略单元 tag 14），只写协议名；空则不发
+    desc: str = ""
 
 
 @dataclass(frozen=True)
@@ -40,6 +46,7 @@ class L3ServiceConfig:
     proto: str
     ip: str
     port: int
+    #: 随 ANN 发给 RM 的描述（策略单元 tag 14），只写协议名；``paths`` 的 URL SID 也沿用它
     desc: str = ""
     #: 应用层类型。``"http"``（D20）：这个端点上的资源还要按 URL 发布内容级 SID；
     #: ``"ftp"``（D21）：这是 FTP 控制端口，被动数据连接按 227/229 动态放行、走这条 SID。
@@ -147,7 +154,7 @@ def load_config(path: str | Path) -> Config:
     rm_ipv4 = str(data["rm_ipv4"])
 
     services: list[ServiceConfig] = []
-    for entry in data.get("services", []):
+    for index, entry in enumerate(data.get("services", [])):
         url = entry["url"]
         default_host, default_port = _default_origin(url)
         services.append(
@@ -155,6 +162,7 @@ def load_config(path: str | Path) -> Config:
                 url=url,
                 origin_host=entry.get("origin_host", default_host),
                 origin_port=int(entry.get("origin_port", default_port)),
+                desc=_load_desc(entry, f"services[{index}]"),
             )
         )
     if not services:
@@ -163,6 +171,18 @@ def load_config(path: str | Path) -> Config:
     l3 = _load_l3(data.get("l3"))
     _check_content_sid_collisions(services, l3)
     return Config(nid=nid, ipv4=ipv4, rm_ipv4=rm_ipv4, services=services, l3=l3)
+
+
+def _load_desc(entry: dict, where: str) -> str:
+    """读一条服务的 ``desc``。它会随 ANN 发给 RM（tag 14），太长只提醒、不拒绝启动。"""
+    desc = str(entry.get("desc", ""))
+    size = len(desc.encode("utf-8"))
+    if size > ANN_DESC_WARN_BYTES:
+        logger.warning(
+            "%s.desc 有 %d 字节：它会随 ANN 发给 RM，只该写协议名（如 http、ftp、mysql），"
+            "放不进通告单元时会被截断", where, size,
+        )
+    return desc
 
 
 def _check_content_sid_collisions(services: list[ServiceConfig], l3: L3Config) -> None:
@@ -239,7 +259,7 @@ def _load_l3(data: dict | None) -> L3Config:
             # 消费端按地址把未知端口回退到 FTP 控制 SID，同一地址两个 FTP 就分不清该走哪条
             raise ValueError(f"{where}：{ip} 上已经有一个 app=ftp 的端点，同一地址只能有一个（D21）")
         services.append(L3ServiceConfig(
-            proto=proto, ip=ip, port=int(port), desc=str(entry.get("desc", "")),
+            proto=proto, ip=ip, port=int(port), desc=_load_desc(entry, where),
             app=app, paths=paths,
         ))
 
