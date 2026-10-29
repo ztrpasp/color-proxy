@@ -1,7 +1,8 @@
 # ANN 通告单元携带 SID 名称与描述（策略 tag 13 / 14）
 
-- 状态：方案已定（2026-10-29）。RM 侧 P0 已实现（the-rm-server-web `dev_zwd` 的 `87f48b3`，2026-10-30），
-  **待真机验证**；RM 的 P1、P2 和终端侧都未实现
+- 状态：方案已定（2026-10-29）。RM 侧 P0 已实现（the-rm-server-web `dev_zwd` 的 `87f48b3`，2026-10-30）；
+  终端侧已实现（color-proxy `fix/tun` 的 `6142756`，2026-10-30，预算 73 字节）。两者都**待真机验证**；
+  RM 的 P1、P2 未实现
 - 2026-10-30 修订：RM 实现 P0 时对照代码 review，改了 6 处，都不涉及报文格式和 tag 号——
   终端预算改为 200 的前提（§2.5、§5、§7）、`len = 0` 的实际后果（§2.4、§3.1）、转发时 AM 位被清零（§3.2、§9）、
   P0 第 1、2 条的做法（§4）、无 TLV 的通告会连 tag 1/2 一起清掉（§6）
@@ -105,6 +106,23 @@ a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a10d147463703a2f2f31302e31302e392e323a333330360e05
 单元 `e8` = N|L|I、AM=1，`54` unit_len = 84，`02` 两个策略单元；
 `0d 14 "tcp://10.10.9.2:3306"`，`0e 05 "mysql"`。
 
+### 2.7 发送与转发的粒度（2026-10-30 补）
+
+**终端**：每条 SID 发一个 ANN，每个 ANN 只带一个通告单元，不攒批。注册成功后按顺序一次发完，中间不限速：
+先 v1 `services[]`，再 L3 服务级，最后 L3 内容级（原型提供端共 4 + 4 + 26 = 34 个 ANN）。
+每个 ANN 最长 8 + 55 + 73 = 136 字节（预算放宽到 200 后是 263 字节），远小于 MTU，不会被 IP 分片。
+刷新（AM=2，默认关）和注销（AM=3，退出时）也是一条 SID 一个包。
+
+**RM**：每收到一个 ANN 立即处理，不跨包合并，也不攒批：
+
+1. 格式检查（`ANN_check_format`）→ 校验和 → 逐个单元存表；
+2. 对每个邻域 AS（跳过通告来源的 AS，以及开启 AS 安全检查时安全等级不够的 AS），挑出可以发给它的单元。
+   这几种单元不转发：存表时判为策略没变（-2）的、不是最短 AS 路径（0）的、被 tag 1/2 策略拦下的；
+3. 每个邻域 AS 生成一个新的 ANN，装着挑出来的单元，PX 序列末尾追加去往该邻域的 PX，发给连着这个邻域的 BR。
+
+所以 RM 只按邻域拆分：收到一个带 n 个单元的 ANN，最多转出「邻域数」个 ANN，每个不超过 n 个单元。
+终端的每个 ANN 只有一个单元，RM 转出的也就各只有一个。`Unit_Num` 只有 4 位，一个 ANN 最多 15 个单元。
+
 ## 3. RM 现状（2026-10-29 审查 the-rm-server-web `dev_zwd`）
 
 本节是 P0 之前的代码状态，行号对应 `c598cb8`；P0 改了什么见 §4。
@@ -161,6 +179,13 @@ a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a10d147463703a2f2f31302e31302e392e323a333330360e05
    - 越界即丢弃整个 ANN，计入 malformed；
    - 这些检查要在算校验和之前做（校验和按 `pkg_len` 读整包），也要在任何单元存表之前全部做完：
      原来是边解析边存表，后面的单元越界时，前面的单元已经存进表里了。
+   - 什么情况下会越界（color-proxy 正常发的包都不会）：
+     - **报文被截断**：`pkg_len` 比实际收到的长。比如 ANN 超过 MTU 被 IP 分片——RM 不做 IP 重组，只看得到第一片
+       （只有多单元的 ANN 才可能这么大：15 个满长单元约 3.8 KB）。后面几片开头不是 CoLoR 头，多半在版本检查就被丢掉；
+     - **发送方长度字段算错**：TLV 的 `len` 按字符数而不是 UTF-8 字节数填（中文 desc 会少算）；`strategy_num`、
+       `Unit_Num` 比实际多；`PX_Num` 写大了（PX 区从 `pkg_len` 倒推，单元区被压短）；flag 置了 N/L/I 却没带对应字段；
+     - **恶意构造**的报文。
+   - 不算越界的：`pkg_len` 比实际收到的短（比如以太网补零，多出的尾巴不读）；`unit_len` 与实算不一致（只记 warn）。
 3. **转发循环读到未初始化数据**：`rm_pkt_process.c:380` 靠「tag == 0 结束」最多扫 32 个槽，但 `mark_array`
    （`ann.c:28`）是没有初始化的栈数组，第 `strategy_num` 个槽以后都是残留数据；碰巧是 tag 1/2 时就会解引用野指针。
    改为 `s_i < unit_front->strategy_num`。
@@ -198,29 +223,34 @@ a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a10d147463703a2f2f31302e31302e392e323a333330360e05
 
 ## 5. 终端侧改动（color-proxy）
 
+已实现（`fix/tun` 的 `6142756`，2026-10-30）。
+
 1. **常量**（`colorproxy/protocol/constants.py`）：`STRATEGY_SID_NAME = 13`、`STRATEGY_SID_DESC = 14`、
-   `ANN_STRATEGY_BUDGET = 73`（部署里所有 RM 都完成 P0 后改为 200，见 §2.5）。
-2. **构造**（`publish.py:143` 的 `_build_announce`）：加 `name: str`、`desc: str` 两个参数，用现有的 `StrategyUnit`
-   （`packets.py:164`）生成 TLV。`Strategy_Num` 与 `Unit_Length` 由 scapy 自动计算。超预算时按 §2.5 的规则取舍并打 warn。
-3. **NAME 自动生成，不需要配置**：v1 用 `_canonical_for_sid(url)`，L3 服务级用 `service_canonical(...)`，
-   L3 内容级用 `content_url(...)`。三处都已经是现成算 L_SID 时用的字符串，直接复用，保证与哈希原文逐字节一致。
+   `ANN_STRATEGY_BUDGET = 73`（部署里所有 RM 都完成 P0 后改为 200，见 §2.5）、`ANN_DESC_WARN_BYTES = 32`。
+2. **裁剪与 TLV**（新模块 `colorproxy/protocol/strategy.py`）：`fit_sid_label(name, desc, lsid)` 按 §2.5 的规则裁剪，
+   返回 `SidLabel`（UTF-8 字节，空表示不发）；`sid_label_units` 生成 `StrategyUnit` 列表，先 13 后 14。
+   另加一道自校验：名称的 SHA1 与 L_SID 对不上时记 error、不发名称——这只可能是代码错误，发出去 RM 也只会标成未校验。
+3. **NAME 自动生成，不需要配置**：取自算 L_SID 的同一个函数。v1 和 L3 内容级用 `sid.py` 的 `sid_name_from_url`
+   （原来的 `_canonical_for_sid`，改名公开），L3 服务级用 `service_canonical`。
 4. **DESC 来源**：
    - L3 服务级：`l3.services[].desc`；
    - L3 内容级（D20 URL SID）：继承所属端点的 desc（8000 端点下的 26 个 URL 都是 `http`）；
-   - v1 `services[]`：`ServiceConfig` 目前没有 desc 字段，加一个可选的 `desc`，不配就不发 DESC。
-   - 配置加载时，desc 超过 32 字节（UTF-8）就打 warn，提醒它会随 ANN 发出、只该写协议名。
-5. **刷新和注销也带 TLV**：`ProviderState` 的已通告表现在只存 `(sid, lsid)`（`state.py:83`），改为同时存 name 和 desc，
-   让 `_announce_all` 发 AM=2 / AM=3 时带上相同的 TLV（理由见 §6）。
+   - v1 `services[]`：`ServiceConfig` 新增可选的 `desc`，不配就不发 DESC；
+   - 配置加载时，desc 超过 32 字节（UTF-8）就打 warn（只提醒，不改值、不拒绝启动）。
+5. **构造与发布**（`publish.py`）：`_build_announce` 增加 `label` 参数。每条 SID 首次发布时裁剪一次（`_announce_once`），
+   结果连同 L_SID 存进已通告表（`state.py` 的 `AnnouncedSid`），AM=2 / AM=3 原样复用，三种通告的 TLV 完全相同（§6）。
+   已通告过的 SID 再次发布时不重新裁剪，超预算的 warn 只打一次。`tools/rm_withdraw.py` 用的是同一张表，注销也带 TLV。
 6. **已改的配置**（2026-10-29）：`config.json` 和 `deploy/prototype/config-svr1-1-provider.json` 的 `l3.services[].desc`
    已改为 `http` / `ftp` / `mysql` / `rtp`；`tools/ftp_server.py --print-services` 输出的 desc 改为 `ftp`；
    `deploy/prototype/acl-rules.md` 已重新生成（只有「说明」列变了，SID 不变）。
    消费端配置里的 desc 和 `l3.peers[].desc` 不会发给 RM，保持原样。
-7. **测试**：
-   - TLV 字节布局用 §2.6 的向量对拍；
-   - 预算边界（正好 73 字节 / 多 1 字节）；
-   - NAME 超预算时整个丢弃；DESC 截断不切断多字节字符；
-   - `Unit_Length ≤ 255`；
-   - 三种 AM 带相同的 TLV。
+7. **测试**（`tests/test_ann_tlv.py`，14 项）：
+   - TLV 字节布局与 §2.6 的 92 字节向量逐字节一致；
+   - 预算边界（正好 73 字节 / 多 1 字节）；NAME 超预算时整个丢弃；DESC 截断不切断多字节字符；不发空 value；
+   - `Unit_Length` 与实算一致，预算 200 时正好 255；
+   - 三种 AM 带相同的 TLV；已通告的 SID 再发布不重新裁剪；
+   - 用 `deploy/prototype/config-svr1-1-provider.json` 走一遍发布：34 条 SID 的名称全部满足 `SHA1 == L_SID`，
+     DESC 分别是 `http`/`ftp`/`mysql`/`rtp`，URL SID 是 `http`，v1 的不带 DESC，都在 73 字节内。
 
 ## 6. 和 AM、刷新、注销的关系
 
@@ -236,8 +266,8 @@ RM 不看 AM（§3.2），收到任何一种通告都是"插入或替换"。如�
 
 | 阶段 | 终端 | RM | 效果 |
 |---|---|---|---|
-| ① 终端先上 | 按 73 字节预算发 TLV | 未改 | 安全。RM 当作未知策略存下、原样转发，只是看不到 |
-| ② 所有 RM 做 P0 | 全部 RM 升级后，预算改 200（§2.5） | P0 | 不会再被超长 TLV 写崩；坏包会被丢弃 |
+| ① 终端先上（已实现） | 按 73 字节预算发 TLV | 未改 | 安全。RM 当作未知策略存下、原样转发，只是看不到 |
+| ② 所有 RM 做 P0（`87f48b3` 已实现，待部署到每台 RM） | 全部 RM 升级后，预算改 200（§2.5） | P0 | 不会再被超长 TLV 写崩；坏包会被丢弃 |
 | ③ RM 做 P1 | — | P1 | Web/CLI 显示名称和描述，名称已校验 |
 | ④ 可选 | — | P2 | 可以按名称前缀写 ACL |
 
