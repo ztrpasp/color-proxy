@@ -96,3 +96,7 @@ python tools/gen_acl_rules.py deploy/prototype/config-svr1-1-provider.json `
 
 `=2`、`=4` 是消费端所在的 AS 号。加 8000 上的新路由时，`tools/origin_server.py` 的 `PUBLISHED_PATHS`、
 提供端 `paths` 和两份消费端的 `sids[]` 要一起改。
+
+提供端 `l3.services[].desc` 只写协议名（`http`、`ftp`、`mysql`、`rtp`）。按 `docs/design-ann-sid-desc.md`
+它将随 ANN 发给 RM、显示在 RM 的 SID 列表里；它也是上面生成的 ACL 清单的「说明」列。FTP 那一条不要再在同一地址上
+发布通配 `"port": 0`（D21，设计 §8.8）。

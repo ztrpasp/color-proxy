@@ -44,7 +44,7 @@
     ],
     "services": [
       { "proto": "tcp", "ip": "172.10.9.2", "port": 8000,
-        "desc": "REST/SSE 演示源站 tools/origin_server.py（D20：另按 URL 发布内容级 SID；paths 必须与其 PUBLISHED_PATHS 一致）",
+        "desc": "http",
         "app": "http", "paths": [
           "/", "/hello.html", "/favicon.ico",
           "/showcase.html", "/items.html", "/monitor.html", "/realtimemonitor.html", "/model.html",
@@ -58,9 +58,9 @@
           "/api/model/education", "/api/model/education/stream"
         ] },
       { "proto": "tcp", "ip": "172.10.9.2", "port": 21, "app": "ftp",
-        "desc": "FTP 控制（D21：被动数据连接按 227/229 动态放行、走这条 SID，不再发布通配 :0）" },
-      { "proto": "tcp", "ip": "172.10.9.2", "port": 3306, "desc": "MySQL" },
-      { "proto": "udp", "ip": "172.10.9.2", "port": 5004, "desc": "RTP 视频" }
+        "desc": "ftp" },
+      { "proto": "tcp", "ip": "172.10.9.2", "port": 3306, "desc": "mysql" },
+      { "proto": "udp", "ip": "172.10.9.2", "port": 5004, "desc": "rtp" }
     ]
   }
 }

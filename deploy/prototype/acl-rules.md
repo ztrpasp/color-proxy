@@ -24,10 +24,10 @@ NID `b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2`，asid `0x00000002`（AS2）。
 
 | id | 服务 | 说明 |
 |---|---|---|
-| 201 | `tcp://10.10.9.2:8000` | REST/SSE 演示源站 tools/origin_server.py |
-| 202 | `tcp://10.10.9.2:21` | FTP 控制 |
-| 203 | `tcp://10.10.9.2:3306` | MySQL |
-| 204 | `udp://10.10.9.2:5004` | RTP 视频 |
+| 201 | `tcp://10.10.9.2:8000` | http |
+| 202 | `tcp://10.10.9.2:21` | ftp |
+| 203 | `tcp://10.10.9.2:3306` | mysql |
+| 204 | `udp://10.10.9.2:5004` | rtp |
 
 ```
 acl add id 201 action deny sid a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a15a7502ad2d72aaa0278cf830ba221e0e97823060 asid 0x00000002 nid b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2
@@ -139,10 +139,10 @@ NID `c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3`，asid `0x00000004`（AS4）。
 
 | id | 服务 | 说明 |
 |---|---|---|
-| 401 | `tcp://10.10.9.2:8000` | REST/SSE 演示源站 tools/origin_server.py |
-| 402 | `tcp://10.10.9.2:21` | FTP 控制 |
-| 403 | `tcp://10.10.9.2:3306` | MySQL |
-| 404 | `udp://10.10.9.2:5004` | RTP 视频 |
+| 401 | `tcp://10.10.9.2:8000` | http |
+| 402 | `tcp://10.10.9.2:21` | ftp |
+| 403 | `tcp://10.10.9.2:3306` | mysql |
+| 404 | `udp://10.10.9.2:5004` | rtp |
 
 ```
 acl add id 401 action deny sid a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a15a7502ad2d72aaa0278cf830ba221e0e97823060 asid 0x00000004 nid c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3

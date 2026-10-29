@@ -50,7 +50,7 @@ def _service_entry(service_ip: str, control_port: int) -> dict:
 def _print_services(service_ip: str, control_port: int) -> None:
     entry = _service_entry(service_ip, control_port)
     print("把这一条粘进提供端 config.json 的 l3.services[]：\n")
-    print("  " + json.dumps({**entry, "desc": "FTP 控制（D21）"}, ensure_ascii=False) + ",")
+    print("  " + json.dumps({**entry, "desc": "ftp"}, ensure_ascii=False) + ",")
     print("\n同样一条粘进消费端 config-consumer.json 的 l3.app_services[]：\n")
     print("  " + json.dumps(entry, ensure_ascii=False) + ",")
     print('\n被动数据端口不用发布；同一地址上也不要再发布通配 "port": 0（§8.8）。')
