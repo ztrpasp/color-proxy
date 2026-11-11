@@ -1,0 +1,216 @@
+## 提供端 log
+2026-09-21 20:58:18,333 INFO colorproxy.l3.provider: L3 隧道已刷新：服务=tcp://172.10.9.2:21 消费端=b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2 回址=172.10.0.12026-09-21 20:58:20,465 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9034 tun_tx=4401 colr_tx=8671 colr_rx=4401 tunnel_up=4 sid_hit=8665 nonipv4_drop=177 nonunicast_drop=192
+2026-09-21 20:58:22,042 INFO colorproxy.l3.provider: L3 隧道已建立：服务=tcp://172.10.9.2:50003 消费端=b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2 回址=172.10.0.1
+2026-09-21 20:58:25,475 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9050 tun_tx=4416 colr_tx=8688 colr_rx=4416 tunnel_up=5 sid_hit=8681 nonipv4_drop=177 nonunicast_drop=192
+2026-09-21 20:59:55,625 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9051 tun_tx=4416 colr_tx=8688 colr_rx=4416 tunnel_up=5 sid_hit=8681 nonipv4_drop=177 nonunicast_drop=193
+2026-09-21 21:03:25,955 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9054 tun_tx=4418 colr_tx=8691 colr_rx=4418 tunnel_up=5 sid_hit=8684 nonipv4_drop=177 nonunicast_drop=193
+2026-09-21 21:03:50,983 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9057 tun_tx=4418 colr_tx=8691 colr_rx=4418 tunnel_up=5 sid_hit=8684 nonipv4_drop=177 nonunicast_drop=196
+2026-09-21 21:11:51,766 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9087 tun_tx=4418 colr_tx=8691 colr_rx=4418 tunnel_up=5 sid_hit=8684 nonipv4_drop=192 nonunicast_drop=211
+2026-09-21 21:12:01,769 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9088 tun_tx=4418 colr_tx=8691 colr_rx=4418 tunnel_up=5 sid_hit=8684 nonipv4_drop=192 nonunicast_drop=212
+2026-09-21 21:14:01,709 INFO colorproxy.l3.provider: L3 隧道已建立：服务=tcp://172.10.9.2:50002 消费端=b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2 回址=172.10.0.1
+2026-09-21 21:14:01,940 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9107 tun_tx=4437 colr_tx=8711 colr_rx=4437 tunnel_up=6 sid_hit=8703 nonipv4_drop=192 nonunicast_drop=212
+2026-09-21 21:14:16,965 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9112 tun_tx=4442 colr_tx=8716 colr_rx=4442 tunnel_up=6 sid_hit=8708 nonipv4_drop=192 nonunicast_drop=212
+2026-09-21 21:14:21,967 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9115 tun_tx=4445 colr_tx=8719 colr_rx=4445 tunnel_up=6 sid_hit=8711 nonipv4_drop=192 nonunicast_drop=212
+2026-09-21 21:14:31,975 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9117 tun_tx=4447 colr_tx=8721 colr_rx=4447 tunnel_up=6 sid_hit=8713 nonipv4_drop=192 nonunicast_drop=212
+2026-09-21 21:14:36,986 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9124 tun_tx=4452 colr_tx=8728 colr_rx=4452 tunnel_up=6 sid_hit=8720 nonipv4_drop=192 nonunicast_drop=212
+2026-09-21 21:14:41,995 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9128 tun_tx=4456 colr_tx=8732 colr_rx=4456 tunnel_up=6 sid_hit=8724 nonipv4_drop=192 nonunicast_drop=212
+2026-09-21 21:14:47,000 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9131 tun_tx=4459 colr_tx=8735 colr_rx=4459 tunnel_up=6 sid_hit=8727 nonipv4_drop=192 nonunicast_drop=212
+2026-09-21 21:14:52,011 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9134 tun_tx=4462 colr_tx=8738 colr_rx=4462 tunnel_up=6 sid_hit=8730 nonipv4_drop=192 nonunicast_drop=212
+2026-09-21 21:14:57,019 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9136 tun_tx=4462 colr_tx=8740 colr_rx=4462 tunnel_up=6 sid_hit=8732 nonipv4_drop=192 nonunicast_drop=212
+2026-09-21 21:15:02,021 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9137 tun_tx=4462 colr_tx=8741 colr_rx=4462 tunnel_up=6 sid_hit=8733 nonipv4_drop=192 nonunicast_drop=212
+2026-09-21 21:15:07,028 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9143 tun_tx=4468 colr_tx=8747 colr_rx=4468 tunnel_up=6 sid_hit=8739 nonipv4_drop=192 nonunicast_drop=212
+2026-09-21 21:15:12,030 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9149 tun_tx=4474 colr_tx=8753 colr_rx=4474 tunnel_up=6 sid_hit=8745 nonipv4_drop=192 nonunicast_drop=212
+2026-09-21 21:15:17,041 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9152 tun_tx=4477 colr_tx=8756 colr_rx=4477 tunnel_up=6 sid_hit=8748 nonipv4_drop=192 nonunicast_drop=212
+2026-09-21 21:15:22,052 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9156 tun_tx=4481 colr_tx=8760 colr_rx=4481 tunnel_up=6 sid_hit=8752 nonipv4_drop=192 nonunicast_drop=212
+2026-09-21 21:15:27,059 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9162 tun_tx=4484 colr_tx=8766 colr_rx=4484 tunnel_up=6 sid_hit=8758 nonipv4_drop=192 nonunicast_drop=212
+2026-09-21 21:15:32,075 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9169 tun_tx=4491 colr_tx=8773 colr_rx=4491 tunnel_up=6 sid_hit=8765 nonipv4_drop=192 nonunicast_drop=212
+2026-09-21 21:15:37,087 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9174 tun_tx=4495 colr_tx=8778 colr_rx=4495 tunnel_up=6 sid_hit=8770 nonipv4_drop=192 nonunicast_drop=212
+2026-09-21 21:15:42,096 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9179 tun_tx=4500 colr_tx=8783 colr_rx=4500 tunnel_up=6 sid_hit=8775 nonipv4_drop=192 nonunicast_drop=212
+2026-09-21 21:15:47,107 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9180 tun_tx=4501 colr_tx=8784 colr_rx=4501 tunnel_up=6 sid_hit=8776 nonipv4_drop=192 nonunicast_drop=212
+2026-09-21 21:15:52,118 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9184 tun_tx=4502 colr_tx=8788 colr_rx=4502 tunnel_up=6 sid_hit=8780 nonipv4_drop=192 nonunicast_drop=212
+2026-09-21 21:15:57,124 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9193 tun_tx=4511 colr_tx=8797 colr_rx=4511 tunnel_up=6 sid_hit=8789 nonipv4_drop=192 nonunicast_drop=212
+2026-09-21 21:16:02,133 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9197 tun_tx=4514 colr_tx=8801 colr_rx=4514 tunnel_up=6 sid_hit=8793 nonipv4_drop=192 nonunicast_drop=212
+2026-09-21 21:16:07,141 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9199 tun_tx=4516 colr_tx=8803 colr_rx=4516 tunnel_up=6 sid_hit=8795 nonipv4_drop=192 nonunicast_drop=212
+2026-09-21 21:16:12,144 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9202 tun_tx=4519 colr_tx=8806 colr_rx=4519 tunnel_up=6 sid_hit=8798 nonipv4_drop=192 nonunicast_drop=212
+2026-09-21 21:16:17,148 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9205 tun_tx=4519 colr_tx=8809 colr_rx=4519 tunnel_up=6 sid_hit=8801 nonipv4_drop=192 nonunicast_drop=212
+2026-09-21 21:16:37,187 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9207 tun_tx=4521 colr_tx=8811 colr_rx=4521 tunnel_up=6 sid_hit=8803 nonipv4_drop=192 nonunicast_drop=212
+2026-09-21 21:16:42,197 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9208 tun_tx=4522 colr_tx=8812 colr_rx=4522 tunnel_up=6 sid_hit=8804 nonipv4_drop=192 nonunicast_drop=212
+2026-09-21 21:16:47,203 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9209 tun_tx=4523 colr_tx=8813 colr_rx=4523 tunnel_up=6 sid_hit=8805 nonipv4_drop=192 nonunicast_drop=212
+2026-09-21 21:16:52,210 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9210 tun_tx=4524 colr_tx=8814 colr_rx=4524 tunnel_up=6 sid_hit=8806 nonipv4_drop=192 nonunicast_drop=212
+2026-09-21 21:16:57,223 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9211 tun_tx=4524 colr_tx=8815 colr_rx=4524 tunnel_up=6 sid_hit=8807 nonipv4_drop=192 nonunicast_drop=212
+2026-09-21 21:19:02,429 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9214 tun_tx=4527 colr_tx=8818 colr_rx=4527 tunnel_up=6 sid_hit=8810 nonipv4_drop=192 nonunicast_drop=212
+2026-09-21 21:19:07,430 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9215 tun_tx=4528 colr_tx=8819 colr_rx=4528 tunnel_up=6 sid_hit=8811 nonipv4_drop=192 nonunicast_drop=212
+2026-09-21 21:19:12,432 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9216 tun_tx=4528 colr_tx=8819 colr_rx=4528 tunnel_up=6 sid_hit=8811 nonipv4_drop=192 nonunicast_drop=213
+2026-09-21 21:19:17,435 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9218 tun_tx=4529 colr_tx=8820 colr_rx=4529 tunnel_up=6 sid_hit=8812 nonipv4_drop=192 nonunicast_drop=214
+2026-09-21 21:19:22,447 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9220 tun_tx=4529 colr_tx=8821 colr_rx=4529 tunnel_up=6 sid_hit=8813 nonipv4_drop=192 nonunicast_drop=215
+2026-09-21 21:21:47,664 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9223 tun_tx=4529 colr_tx=8821 colr_rx=4529 tunnel_up=6 sid_hit=8813 nonipv4_drop=192 nonunicast_drop=218
+2026-09-21 21:24:02,872 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9224 tun_tx=4529 colr_tx=8821 colr_rx=4529 tunnel_up=6 sid_hit=8813 nonipv4_drop=192 nonunicast_drop=219
+2026-09-21 21:26:48,085 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9227 tun_tx=4532 colr_tx=8824 colr_rx=4532 tunnel_up=6 sid_hit=8816 nonipv4_drop=192 nonunicast_drop=219
+2026-09-21 21:26:53,096 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9228 tun_tx=4533 colr_tx=8825 colr_rx=4533 tunnel_up=6 sid_hit=8817 nonipv4_drop=192 nonunicast_drop=219
+2026-09-21 21:27:03,105 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9229 tun_tx=4534 colr_tx=8826 colr_rx=4534 tunnel_up=6 sid_hit=8818 nonipv4_drop=192 nonunicast_drop=219
+2026-09-21 21:27:08,117 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9230 tun_tx=4534 colr_tx=8827 colr_rx=4534 tunnel_up=6 sid_hit=8819 nonipv4_drop=192 nonunicast_drop=219
+2026-09-21 21:29:23,374 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9232 tun_tx=4536 colr_tx=8829 colr_rx=4536 tunnel_up=6 sid_hit=8821 nonipv4_drop=192 nonunicast_drop=219
+2026-09-21 21:29:28,380 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9234 tun_tx=4538 colr_tx=8831 colr_rx=4538 tunnel_up=6 sid_hit=8823 nonipv4_drop=192 nonunicast_drop=219
+2026-09-21 21:29:38,394 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9235 tun_tx=4539 colr_tx=8832 colr_rx=4539 tunnel_up=6 sid_hit=8824 nonipv4_drop=192 nonunicast_drop=219
+2026-09-21 21:29:43,406 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9236 tun_tx=4539 colr_tx=8833 colr_rx=4539 tunnel_up=6 sid_hit=8825 nonipv4_drop=192 nonunicast_drop=219
+2026-09-21 21:31:01,012 INFO colorproxy.l3.provider: L3 隧道已刷新：服务=tcp://172.10.9.2:8000 消费端=b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2 回址=172.10.0.1
+2026-09-21 21:31:03,541 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9240 tun_tx=4544 colr_tx=8838 colr_rx=4544 tunnel_up=6 sid_hit=8829 nonipv4_drop=192 nonunicast_drop=219
+2026-09-21 21:31:23,656 INFO colorproxy.l3.provider: L3 隧道已刷新：服务=tcp://172.10.9.2:21 消费端=b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2 回址=172.10.0.12026-09-21 21:31:25,267 INFO colorproxy.l3.provider: L3 隧道已刷新：服务=tcp://172.10.9.2:50004 消费端=b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2 回址=172.10.0.1
+2026-09-21 21:31:28,569 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=9260 tun_tx=4564 colr_tx=8860 colr_rx=4564 tunnel_up=6 sid_hit=8849 nonipv4_drop=192 nonunicast_drop=219
+2026-09-21 21:31:31,371 INFO colorproxy.l3.provider: L3 隧道已建立：服务=tcp://172.10.9.2:50001 消费端=b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2 回址=172.10.0.1
+2026-09-21 21:31:33,575 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=10296 tun_tx=5084 colr_tx=9896 colr_rx=5084 tunnel_up=7 sid_hit=9885 nonipv4_drop=192 nonunicast_drop=219
+2026-09-21 21:31:38,577 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=12869 tun_tx=6369 colr_tx=12469 colr_rx=6369 tunnel_up=7 sid_hit=12458 nonipv4_drop=192 nonunicast_drop=219
+2026-09-21 21:31:43,581 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=15445 tun_tx=7657 colr_tx=15045 colr_rx=7657 tunnel_up=7 sid_hit=15034 nonipv4_drop=192 nonunicast_drop=219
+2026-09-21 21:31:48,598 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=17746 tun_tx=8812 colr_tx=17347 colr_rx=8812 tunnel_up=7 sid_hit=17335 nonipv4_drop=192 nonunicast_drop=219
+2026-09-21 21:32:14,755 INFO colorproxy.l3.provider: L3 隧道已刷新：服务=tcp://172.10.9.2:50002 消费端=b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2 回址=172.10.0.1
+2026-09-21 21:32:18,635 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=17829 tun_tx=8974 colr_tx=17431 colr_rx=8974 tunnel_up=7 sid_hit=17418 nonipv4_drop=192 nonunicast_drop=219
+2026-09-21 21:34:18,820 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=17855 tun_tx=8974 colr_tx=17431 colr_rx=8974 tunnel_up=7 sid_hit=17418 nonipv4_drop=205 nonunicast_drop=232
+2026-09-21 21:34:23,829 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=17857 tun_tx=8974 colr_tx=17431 colr_rx=8974 tunnel_up=7 sid_hit=17418 nonipv4_drop=206 nonunicast_drop=233
+2026-09-21 21:36:03,994 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=17858 tun_tx=8974 colr_tx=17431 colr_rx=8974 tunnel_up=7 sid_hit=17418 nonipv4_drop=206 nonunicast_drop=234
+2026-09-21 21:37:19,118 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=17861 tun_tx=8976 colr_tx=17434 colr_rx=8976 tunnel_up=7 sid_hit=17421 nonipv4_drop=206 nonunicast_drop=234
+2026-09-21 21:37:47,648 INFO colorproxy.l3.provider: L3 隧道已建立：服务=tcp://172.10.9.2:3306 消费端=b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2 回址=172.10.0.1
+2026-09-21 21:37:47,668 WARNING colorproxy.l3.provider: 回程包的源端点 ('udp', '172.10.9.2', 137) 不是本机发布的 L3 服务，丢弃
+2026-09-21 21:37:49,166 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=17867 tun_tx=8978 colr_tx=17436 colr_rx=8978 tunnel_up=8 sid_hit=17422 sid_miss=1 nonipv4_drop=208 nonunicast_drop=236
+2026-09-21 21:37:49,183 WARNING colorproxy.l3.provider: 回程包的源端点 ('udp', '172.10.9.2', 137) 不是本机发布的 L3 服务，丢弃
+2026-09-21 21:37:50,694 WARNING colorproxy.l3.provider: 回程包的源端点 ('udp', '172.10.9.2', 137) 不是本机发布的 L3 服务，丢弃
+2026-09-21 21:37:54,181 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=17879 tun_tx=8987 colr_tx=17446 colr_rx=8987 tunnel_up=8 sid_hit=17432 sid_miss=3 nonipv4_drop=208 nonunicast_drop=236
+2026-09-21 21:40:54,476 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=17890 tun_tx=8999 colr_tx=17457 colr_rx=8999 tunnel_up=8 sid_hit=17443 sid_miss=3 nonipv4_drop=208 nonunicast_drop=236
+2026-09-21 21:41:04,501 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=17891 tun_tx=9001 colr_tx=17458 colr_rx=9001 tunnel_up=8 sid_hit=17444 sid_miss=3 nonipv4_drop=208 nonunicast_drop=236
+2026-09-21 21:48:05,242 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=17892 tun_tx=9001 colr_tx=17458 colr_rx=9001 tunnel_up=8 sid_hit=17444 sid_miss=3 nonipv4_drop=208 nonunicast_drop=237
+2026-09-21 22:38:24,699 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=18146 tun_tx=9002 colr_tx=17460 colr_rx=9002 tunnel_up=8 sid_hit=17446 sid_miss=3 nonipv4_drop=328 nonunicast_drop=369
+2026-09-21 22:38:29,709 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=18163 tun_tx=9002 colr_tx=17461 colr_rx=9002 tunnel_up=8 sid_hit=17447 sid_miss=3 nonipv4_drop=335 nonunicast_drop=378
+2026-09-21 22:38:34,713 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=18177 tun_tx=9002 colr_tx=17462 colr_rx=9002 tunnel_up=8 sid_hit=17448 sid_miss=3 nonipv4_drop=340 nonunicast_drop=386
+2026-09-21 22:38:39,720 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=18179 tun_tx=9002 colr_tx=17463 colr_rx=9002 tunnel_up=8 sid_hit=17449 sid_miss=3 nonipv4_drop=340 nonunicast_drop=387
+2026-09-21 22:38:49,745 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=18180 tun_tx=9002 colr_tx=17464 colr_rx=9002 tunnel_up=8 sid_hit=17450 sid_miss=3 nonipv4_drop=340 nonunicast_drop=387
+2026-09-21 22:39:34,825 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=18183 tun_tx=9005 colr_tx=17467 colr_rx=9005 tunnel_up=8 sid_hit=17453 sid_miss=3 nonipv4_drop=340 nonunicast_drop=387
+2026-09-21 22:39:39,838 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=18184 tun_tx=9006 colr_tx=17468 colr_rx=9006 tunnel_up=8 sid_hit=17454 sid_miss=3 nonipv4_drop=340 nonunicast_drop=387
+2026-09-21 22:39:49,850 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=18185 tun_tx=9007 colr_tx=17469 colr_rx=9007 tunnel_up=8 sid_hit=17455 sid_miss=3 nonipv4_drop=340 nonunicast_drop=387
+2026-09-21 22:39:54,855 INFO colorproxy.l3.service: [L3/提供端 计数器] tun_rx=18186 tun_tx=9007 colr_tx=17470 colr_rx=9007 tunnel_up=8 sid_hit=17456 sid_miss=3 nonipv4_drop=340 nonunicast_drop=387
+
+
+## 客户端 log
+PS C:\Users\zeusnet\Desktop\color-proxy-dev_tun> python -m colorproxy.consumer.main config-consumer.json -v
+2026-09-21 21:30:48,324 INFO colorproxy.registration: 向 RM(10.10.0.5) 发送注册报文（本机 10.10.0.2，NID=b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2）
+2026-09-21 21:30:48,324 INFO colorproxy.transport.sender: CoLoR 出口：10.10.0.5 经网卡 \Device\NPF_{80BD25B7-16C6-40AD-88FE-3658BE545E62}，下一跳 MAC None2026-09-21 21:30:48,329 WARNING colorproxy.transport.receiver: 收到发往 10.10.0.5 的 CoLoR 报文，但本进程绑定的是 10.10.0.2，已丢弃（同类只提示一次）。若 10.10.0.5 也是本机地址，说明配置里的 ipv4 指向了另一张网卡——RM 的回复会一直被丢在这里
+2026-09-21 21:30:48,330 INFO colorproxy.registration: 收到 RM 同步：1 个域内代理，1 个边界路由器
+2026-09-21 21:30:48,330 INFO colorproxy.registration: 注册完成（共发出 1 个注册报文），按 REGISTER_REFRESH_SEC=0 不再重复注册
+2026-09-21 21:30:48,330 INFO colorproxy.consumer.consumer: 已预载 4 条内容级静态 SID（按 URL，联调用）
+2026-09-21 21:30:48,331 INFO colorproxy.consumer.consumer: 已预载服务级静态 SID：tcp://172.10.9.2:8000 [端点级 HTTP：SID 表未就绪时的降级路径（设计 §9.2）] (SID=a1a1a1a1a1a1a1a1…)
+2026-09-21 21:30:48,334 INFO colorproxy.consumer.sid_table: 已向 RM(10.10.0.5) 请求本域 SID 列表
+2026-09-21 21:30:48,335 INFO colorproxy.consumer.sid_table: 收到 RM 本域 SID 列表：新登记 10 条（当前共 10 条）
+2026-09-21 21:30:48,335 INFO colorproxy.consumer.sid_table: 收到 RM 本域 SID 列表：新登记 3 条（当前共 13 条）
+2026-09-21 21:30:49,834 INFO colorproxy.consumer.consumer: 本域 SID 表已就绪：13 条
+2026-09-21 21:30:49,846 INFO colorproxy.tun.device_win: 已加载 C:\Users\zeusnet\Desktop\color-proxy-dev_tun\bin\amd64\wintun.dll
+2026-09-21 21:30:50,230 INFO colorproxy.tun.device_win: Wintun 适配器 color0 已就绪（LUID=0x35008000000000，环形缓冲 4096 KiB）
+2026-09-21 21:30:50,234 DEBUG colorproxy.tun.device_win: 执行：netsh interface ipv4 set address name=color0 static 10.99.1.1 255.255.255.0
+2026-09-21 21:30:50,363 DEBUG colorproxy.tun.device_win: 执行：netsh interface ipv4 set subinterface color0 mtu=1280 store=active
+2026-09-21 21:30:50,423 INFO colorproxy.tun.device_win: 已配置 color0：10.99.1.1/255.255.255.0 MTU=1280
+2026-09-21 21:30:50,423 DEBUG colorproxy.tun.device_win: 执行：netsh interface ipv4 add route 172.10.9.2/32 interface=color0 store=active
+2026-09-21 21:30:50,471 INFO colorproxy.tun.device_win: 已加路由 172.10.9.2/32 → color0
+2026-09-21 21:30:50,472 INFO colorproxy.consumer.consumer: L3 隧道就绪：color0(10.99.1.1)，捕获路由 ['172.10.9.2/32']
+2026-09-21 21:30:50,472 INFO colorproxy.consumer.consumer: HTTP 正向代理就绪，监听端口 8910
+2026-09-21 21:30:51,482 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=15 nonipv4_drop=15
+2026-09-21 21:30:56,528 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=82 nonipv4_drop=48 nonunicast_drop=34
+2026-09-21 21:31:00,616 INFO colorproxy.l3.consumer: L3 隧道未建立，已发 GET：服务=('tcp', '172.10.9.2', 8000) SID=a1a1a1a1a1a1a1a1… SegID=1
+2026-09-21 21:31:00,623 INFO colorproxy.l3.consumer: L3 隧道已建立：SID=a1a1a1a1a1a1a1a1… 下一跳=10.10.0.1，冲刷首包 1 个
+2026-09-21 21:31:00,623 INFO colorproxy.transport.sender: CoLoR 出口：10.10.0.1 经网卡 \Device\NPF_{80BD25B7-16C6-40AD-88FE-3658BE545E62}，下一跳 MAC None2026-09-21 21:31:01,568 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=117 tun_tx=4 colr_tx=6 colr_rx=5 tunnel_up=1 sid_hit=5 nonipv4_drop=60 nonunicast_drop=52 firstpkt_queued=1
+2026-09-21 21:31:06,606 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=153 tun_tx=4 colr_tx=6 colr_rx=5 tunnel_up=1 sid_hit=5 nonipv4_drop=74 nonunicast_drop=74 firstpkt_queued=1
+2026-09-21 21:31:23,253 INFO colorproxy.l3.consumer: L3 隧道未建立，已发 GET：服务=('tcp', '172.10.9.2', 21) SID=a1a1a1a1a1a1a1a1… SegID=2
+2026-09-21 21:31:23,267 INFO colorproxy.l3.consumer: L3 隧道已建立：SID=a1a1a1a1a1a1a1a1… 下一跳=10.10.0.1，冲刷首包 1 个
+2026-09-21 21:31:24,870 INFO colorproxy.l3.consumer: L3 隧道未建立，已发 GET：服务=('tcp', '172.10.9.2', 50004) SID=a1a1a1a1a1a1a1a1… SegID=3
+2026-09-21 21:31:24,883 INFO colorproxy.l3.consumer: L3 隧道已建立：SID=a1a1a1a1a1a1a1a1… 下一跳=10.10.0.1，冲刷首包 1 个
+2026-09-21 21:31:26,766 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=173 tun_tx=24 colr_tx=28 colr_rx=27 tunnel_up=3 sid_hit=25 nonipv4_drop=74 nonunicast_drop=74 firstpkt_queued=3
+2026-09-21 21:31:30,972 INFO colorproxy.l3.consumer: L3 隧道未建立，已发 GET：服务=('tcp', '172.10.9.2', 50001) SID=a1a1a1a1a1a1a1a1… SegID=4
+2026-09-21 21:31:30,980 INFO colorproxy.l3.consumer: L3 隧道已建立：SID=a1a1a1a1a1a1a1a1… 下一跳=10.10.0.1，冲刷首包 1 个
+2026-09-21 21:31:31,808 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=345 tun_tx=361 colr_tx=200 colr_rx=365 tunnel_up=4 sid_hit=197 nonipv4_drop=74 nonunicast_drop=74 firstpkt_queued=4
+2026-09-21 21:31:36,868 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=1642 tun_tx=2955 colr_tx=1497 colr_rx=2959 tunnel_up=4 sid_hit=1494 nonipv4_drop=74 nonunicast_drop=74 firstpkt_queued=4
+2026-09-21 21:31:41,934 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=2925 tun_tx=5522 colr_tx=2780 colr_rx=5526 tunnel_up=4 sid_hit=2777 nonipv4_drop=74 nonunicast_drop=74 firstpkt_queued=4
+2026-09-21 21:31:46,995 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=4269 tun_tx=8209 colr_tx=4124 colr_rx=8213 tunnel_up=4 sid_hit=4121 nonipv4_drop=74 nonunicast_drop=74 firstpkt_queued=4
+2026-09-21 21:31:52,043 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=4421 tun_tx=8510 colr_tx=4277 colr_rx=8514 tunnel_up=4 sid_hit=4273 nonipv4_drop=74 nonunicast_drop=74 firstpkt_queued=4
+2026-09-21 21:31:57,087 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=4451 tun_tx=8510 colr_tx=4277 colr_rx=8514 tunnel_up=4 sid_hit=4273 nonipv4_drop=89 nonunicast_drop=89 firstpkt_queued=4
+2026-09-21 21:32:14,358 INFO colorproxy.l3.consumer: L3 隧道未建立，已发 GET：服务=('tcp', '172.10.9.2', 50002) SID=a1a1a1a1a1a1a1a1… SegID=5
+2026-09-21 21:32:14,365 INFO colorproxy.l3.consumer: L3 隧道已建立：SID=a1a1a1a1a1a1a1a1… 下一跳=10.10.0.1，冲刷首包 1 个
+2026-09-21 21:32:17,277 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=4613 tun_tx=8593 colr_tx=4440 colr_rx=8598 tunnel_up=5 sid_hit=4435 nonipv4_drop=89 nonunicast_drop=89 firstpkt_queued=5
+2026-09-21 21:34:18,063 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=4616 tun_tx=8593 colr_tx=4440 colr_rx=8598 tunnel_up=5 sid_hit=4435 nonipv4_drop=89 nonunicast_drop=92 firstpkt_queued=5
+2026-09-21 21:35:53,931 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=4617 tun_tx=8593 colr_tx=4440 colr_rx=8598 tunnel_up=5 sid_hit=4435 nonipv4_drop=89 nonunicast_drop=93 firstpkt_queued=5
+2026-09-21 21:36:04,031 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=4636 tun_tx=8593 colr_tx=4440 colr_rx=8598 tunnel_up=5 sid_hit=4435 nonipv4_drop=98 nonunicast_drop=103 firstpkt_queued=5
+2026-09-21 21:36:09,082 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=4667 tun_tx=8593 colr_tx=4440 colr_rx=8598 tunnel_up=5 sid_hit=4435 nonipv4_drop=113 nonunicast_drop=119 firstpkt_queued=5
+2026-09-21 21:36:14,135 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=4707 tun_tx=8593 colr_tx=4440 colr_rx=8598 tunnel_up=5 sid_hit=4435 nonipv4_drop=129 nonunicast_drop=143 firstpkt_queued=5
+2026-09-21 21:36:19,180 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=4733 tun_tx=8593 colr_tx=4440 colr_rx=8598 tunnel_up=5 sid_hit=4435 nonipv4_drop=139 nonunicast_drop=159 firstpkt_queued=5
+2026-09-21 21:36:24,225 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=4743 tun_tx=8593 colr_tx=4440 colr_rx=8598 tunnel_up=5 sid_hit=4435 nonipv4_drop=143 nonunicast_drop=165 firstpkt_queued=5
+2026-09-21 21:37:14,693 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=4745 tun_tx=8596 colr_tx=4442 colr_rx=8601 tunnel_up=5 sid_hit=4437 nonipv4_drop=143 nonunicast_drop=165 firstpkt_queued=5
+2026-09-21 21:37:47,250 INFO colorproxy.l3.consumer: L3 隧道未建立，已发 GET：服务=('tcp', '172.10.9.2', 3306) SID=a1a1a1a1a1a1a1a1… SegID=6
+2026-09-21 21:37:47,257 INFO colorproxy.l3.consumer: L3 隧道已建立：SID=a1a1a1a1a1a1a1a1… 下一跳=10.10.0.1，冲刷首包 1 个
+2026-09-21 21:37:50,028 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=4747 tun_tx=8597 colr_tx=4445 colr_rx=8603 tunnel_up=6 sid_hit=4439 nonipv4_drop=143 nonunicast_drop=165 firstpkt_queued=6
+2026-09-21 21:37:55,069 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=4756 tun_tx=8607 colr_tx=4454 colr_rx=8613 tunnel_up=6 sid_hit=4448 nonipv4_drop=143 nonunicast_drop=165 firstpkt_queued=6
+2026-09-21 21:40:01,365 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=4808 tun_tx=8607 colr_tx=4454 colr_rx=8613 tunnel_up=6 sid_hit=4448 nonipv4_drop=168 nonunicast_drop=192 firstpkt_queued=6
+2026-09-21 21:40:06,415 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=4878 tun_tx=8607 colr_tx=4454 colr_rx=8613 tunnel_up=6 sid_hit=4448 nonipv4_drop=196 nonunicast_drop=234 firstpkt_queued=6
+2026-09-21 21:40:11,446 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=4883 tun_tx=8607 colr_tx=4454 colr_rx=8613 tunnel_up=6 sid_hit=4448 nonipv4_drop=198 nonunicast_drop=237 firstpkt_queued=6
+2026-09-21 21:40:16,471 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=4935 tun_tx=8607 colr_tx=4454 colr_rx=8613 tunnel_up=6 sid_hit=4448 nonipv4_drop=220 nonunicast_drop=267 firstpkt_queued=6
+2026-09-21 21:40:21,522 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=4937 tun_tx=8607 colr_tx=4454 colr_rx=8613 tunnel_up=6 sid_hit=4448 nonipv4_drop=220 nonunicast_drop=269 firstpkt_queued=6
+2026-09-21 21:40:26,578 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=4967 tun_tx=8607 colr_tx=4454 colr_rx=8613 tunnel_up=6 sid_hit=4448 nonipv4_drop=232 nonunicast_drop=287 firstpkt_queued=6
+2026-09-21 21:40:56,854 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=4979 tun_tx=8618 colr_tx=4466 colr_rx=8624 tunnel_up=6 sid_hit=4460 nonipv4_drop=232 nonunicast_drop=287 firstpkt_queued=6
+2026-09-21 21:41:01,899 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=4981 tun_tx=8619 colr_tx=4468 colr_rx=8625 tunnel_up=6 sid_hit=4462 nonipv4_drop=232 nonunicast_drop=287 firstpkt_queued=6
+2026-09-21 21:45:49,159 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5031 tun_tx=8619 colr_tx=4468 colr_rx=8625 tunnel_up=6 sid_hit=4462 nonipv4_drop=256 nonunicast_drop=313 firstpkt_queued=6
+2026-09-21 21:45:54,224 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5066 tun_tx=8619 colr_tx=4468 colr_rx=8625 tunnel_up=6 sid_hit=4462 nonipv4_drop=270 nonunicast_drop=334 firstpkt_queued=6
+2026-09-21 21:45:59,273 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5076 tun_tx=8619 colr_tx=4468 colr_rx=8625 tunnel_up=6 sid_hit=4462 nonipv4_drop=274 nonunicast_drop=340 firstpkt_queued=6
+2026-09-21 21:46:04,313 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5107 tun_tx=8619 colr_tx=4468 colr_rx=8625 tunnel_up=6 sid_hit=4462 nonipv4_drop=286 nonunicast_drop=359 firstpkt_queued=6
+2026-09-21 21:46:44,694 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5110 tun_tx=8619 colr_tx=4468 colr_rx=8625 tunnel_up=6 sid_hit=4462 nonipv4_drop=286 nonunicast_drop=362 firstpkt_queued=6
+2026-09-21 21:48:00,452 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5111 tun_tx=8619 colr_tx=4468 colr_rx=8625 tunnel_up=6 sid_hit=4462 nonipv4_drop=286 nonunicast_drop=363 firstpkt_queued=6
+2026-09-21 21:54:29,166 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5141 tun_tx=8619 colr_tx=4468 colr_rx=8625 tunnel_up=6 sid_hit=4462 nonipv4_drop=301 nonunicast_drop=378 firstpkt_queued=6
+2026-09-21 21:55:24,652 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5163 tun_tx=8619 colr_tx=4468 colr_rx=8625 tunnel_up=6 sid_hit=4462 nonipv4_drop=311 nonunicast_drop=390 firstpkt_queued=6
+2026-09-21 21:55:29,719 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5164 tun_tx=8619 colr_tx=4468 colr_rx=8625 tunnel_up=6 sid_hit=4462 nonipv4_drop=311 nonunicast_drop=391 firstpkt_queued=6
+2026-09-21 21:55:34,755 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5166 tun_tx=8619 colr_tx=4468 colr_rx=8625 tunnel_up=6 sid_hit=4462 nonipv4_drop=311 nonunicast_drop=393 firstpkt_queued=6
+2026-09-21 21:55:39,816 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5167 tun_tx=8619 colr_tx=4468 colr_rx=8625 tunnel_up=6 sid_hit=4462 nonipv4_drop=311 nonunicast_drop=394 firstpkt_queued=6
+2026-09-21 21:59:57,341 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5168 tun_tx=8619 colr_tx=4468 colr_rx=8625 tunnel_up=6 sid_hit=4462 nonipv4_drop=311 nonunicast_drop=395 firstpkt_queued=6
+2026-09-21 22:00:17,493 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5176 tun_tx=8619 colr_tx=4476 colr_rx=8625 tunnel_up=6 sid_hit=4470 nonipv4_drop=311 nonunicast_drop=395 firstpkt_queued=6
+2026-09-21 22:00:22,559 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5180 tun_tx=8619 colr_tx=4480 colr_rx=8625 tunnel_up=6 sid_hit=4474 nonipv4_drop=311 nonunicast_drop=395 firstpkt_queued=6
+2026-09-21 22:00:32,653 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5183 tun_tx=8619 colr_tx=4483 colr_rx=8625 tunnel_up=6 sid_hit=4477 nonipv4_drop=311 nonunicast_drop=395 firstpkt_queued=6
+2026-09-21 22:00:42,734 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5192 tun_tx=8619 colr_tx=4492 colr_rx=8625 tunnel_up=6 sid_hit=4486 nonipv4_drop=311 nonunicast_drop=395 firstpkt_queued=6
+2026-09-21 22:00:47,796 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5195 tun_tx=8619 colr_tx=4495 colr_rx=8625 tunnel_up=6 sid_hit=4489 nonipv4_drop=311 nonunicast_drop=395 firstpkt_queued=6
+2026-09-21 22:00:57,919 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5198 tun_tx=8619 colr_tx=4498 colr_rx=8625 tunnel_up=6 sid_hit=4492 nonipv4_drop=311 nonunicast_drop=395 firstpkt_queued=6
+2026-09-21 22:01:08,026 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5207 tun_tx=8619 colr_tx=4507 colr_rx=8625 tunnel_up=6 sid_hit=4501 nonipv4_drop=311 nonunicast_drop=395 firstpkt_queued=6
+2026-09-21 22:01:13,079 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5210 tun_tx=8619 colr_tx=4510 colr_rx=8625 tunnel_up=6 sid_hit=4504 nonipv4_drop=311 nonunicast_drop=395 firstpkt_queued=6
+2026-09-21 22:01:23,188 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5213 tun_tx=8619 colr_tx=4513 colr_rx=8625 tunnel_up=6 sid_hit=4507 nonipv4_drop=311 nonunicast_drop=395 firstpkt_queued=6
+2026-09-21 22:01:58,508 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5221 tun_tx=8619 colr_tx=4521 colr_rx=8625 tunnel_up=6 sid_hit=4515 nonipv4_drop=311 nonunicast_drop=395 firstpkt_queued=6
+2026-09-21 22:02:03,567 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5225 tun_tx=8619 colr_tx=4525 colr_rx=8625 tunnel_up=6 sid_hit=4519 nonipv4_drop=311 nonunicast_drop=395 firstpkt_queued=6
+2026-09-21 22:02:13,646 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5228 tun_tx=8619 colr_tx=4528 colr_rx=8625 tunnel_up=6 sid_hit=4522 nonipv4_drop=311 nonunicast_drop=395 firstpkt_queued=6
+2026-09-21 22:03:19,120 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5234 tun_tx=8619 colr_tx=4534 colr_rx=8625 tunnel_up=6 sid_hit=4528 nonipv4_drop=311 nonunicast_drop=395 firstpkt_queued=6
+2026-09-21 22:03:24,167 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5240 tun_tx=8619 colr_tx=4540 colr_rx=8625 tunnel_up=6 sid_hit=4534 nonipv4_drop=311 nonunicast_drop=395 firstpkt_queued=6
+2026-09-21 22:03:34,292 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5243 tun_tx=8619 colr_tx=4543 colr_rx=8625 tunnel_up=6 sid_hit=4537 nonipv4_drop=311 nonunicast_drop=395 firstpkt_queued=6
+2026-09-21 22:08:41,643 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5252 tun_tx=8619 colr_tx=4552 colr_rx=8625 tunnel_up=6 sid_hit=4546 nonipv4_drop=311 nonunicast_drop=395 firstpkt_queued=6
+2026-09-21 22:08:46,712 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5255 tun_tx=8619 colr_tx=4555 colr_rx=8625 tunnel_up=6 sid_hit=4549 nonipv4_drop=311 nonunicast_drop=395 firstpkt_queued=6
+2026-09-21 22:08:56,798 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5258 tun_tx=8619 colr_tx=4558 colr_rx=8625 tunnel_up=6 sid_hit=4552 nonipv4_drop=311 nonunicast_drop=395 firstpkt_queued=6
+2026-09-21 22:10:32,490 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5308 tun_tx=8619 colr_tx=4558 colr_rx=8625 tunnel_up=6 sid_hit=4552 nonipv4_drop=335 nonunicast_drop=421 firstpkt_queued=6
+2026-09-21 22:10:37,536 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5347 tun_tx=8619 colr_tx=4558 colr_rx=8625 tunnel_up=6 sid_hit=4552 nonipv4_drop=351 nonunicast_drop=444 firstpkt_queued=6
+2026-09-21 22:10:42,563 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5353 tun_tx=8619 colr_tx=4558 colr_rx=8625 tunnel_up=6 sid_hit=4552 nonipv4_drop=353 nonunicast_drop=448 firstpkt_queued=6
+2026-09-21 22:10:47,610 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5384 tun_tx=8619 colr_tx=4558 colr_rx=8625 tunnel_up=6 sid_hit=4552 nonipv4_drop=365 nonunicast_drop=467 firstpkt_queued=6
+2026-09-21 22:11:58,105 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5385 tun_tx=8619 colr_tx=4558 colr_rx=8625 tunnel_up=6 sid_hit=4552 nonipv4_drop=365 nonunicast_drop=468 firstpkt_queued=6
+2026-09-21 22:16:44,860 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5392 tun_tx=8619 colr_tx=4558 colr_rx=8625 tunnel_up=6 sid_hit=4552 nonipv4_drop=368 nonunicast_drop=472 firstpkt_queued=6
+2026-09-21 22:16:49,909 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5400 tun_tx=8619 colr_tx=4558 colr_rx=8625 tunnel_up=6 sid_hit=4552 nonipv4_drop=371 nonunicast_drop=477 firstpkt_queued=6
+2026-09-21 22:16:54,964 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5409 tun_tx=8619 colr_tx=4567 colr_rx=8625 tunnel_up=6 sid_hit=4561 nonipv4_drop=371 nonunicast_drop=477 firstpkt_queued=6
+2026-09-21 22:17:00,008 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5438 tun_tx=8619 colr_tx=4570 colr_rx=8625 tunnel_up=6 sid_hit=4564 nonipv4_drop=384 nonunicast_drop=490 firstpkt_queued=6
+2026-09-21 22:17:05,068 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5445 tun_tx=8619 colr_tx=4577 colr_rx=8625 tunnel_up=6 sid_hit=4571 nonipv4_drop=384 nonunicast_drop=490 firstpkt_queued=6
+2026-09-21 22:17:10,121 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5447 tun_tx=8619 colr_tx=4579 colr_rx=8625 tunnel_up=6 sid_hit=4573 nonipv4_drop=384 nonunicast_drop=490 firstpkt_queued=6
+2026-09-21 22:17:15,173 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5448 tun_tx=8619 colr_tx=4580 colr_rx=8625 tunnel_up=6 sid_hit=4574 nonipv4_drop=384 nonunicast_drop=490 firstpkt_queued=6
+2026-09-21 22:17:25,246 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5452 tun_tx=8619 colr_tx=4584 colr_rx=8625 tunnel_up=6 sid_hit=4578 nonipv4_drop=384 nonunicast_drop=490 firstpkt_queued=6
+2026-09-21 22:17:30,282 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5453 tun_tx=8619 colr_tx=4585 colr_rx=8625 tunnel_up=6 sid_hit=4579 nonipv4_drop=384 nonunicast_drop=490 firstpkt_queued=6
+2026-09-21 22:17:40,350 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5454 tun_tx=8619 colr_tx=4586 colr_rx=8625 tunnel_up=6 sid_hit=4580 nonipv4_drop=384 nonunicast_drop=490 firstpkt_queued=6
+2026-09-21 22:23:58,735 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5455 tun_tx=8619 colr_tx=4586 colr_rx=8625 tunnel_up=6 sid_hit=4580 nonipv4_drop=384 nonunicast_drop=491 firstpkt_queued=6
+2026-09-21 22:25:39,608 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5476 tun_tx=8619 colr_tx=4586 colr_rx=8625 tunnel_up=6 sid_hit=4580 nonipv4_drop=394 nonunicast_drop=502 firstpkt_queued=6
+2026-09-21 22:25:44,642 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5477 tun_tx=8619 colr_tx=4586 colr_rx=8625 tunnel_up=6 sid_hit=4580 nonipv4_drop=394 nonunicast_drop=503 firstpkt_queued=6
+2026-09-21 22:25:49,688 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5479 tun_tx=8619 colr_tx=4586 colr_rx=8625 tunnel_up=6 sid_hit=4580 nonipv4_drop=394 nonunicast_drop=505 firstpkt_queued=6
+2026-09-21 22:25:54,720 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5481 tun_tx=8619 colr_tx=4586 colr_rx=8625 tunnel_up=6 sid_hit=4580 nonipv4_drop=394 nonunicast_drop=507 firstpkt_queued=6
+2026-09-21 22:35:55,224 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5482 tun_tx=8619 colr_tx=4586 colr_rx=8625 tunnel_up=6 sid_hit=4580 nonipv4_drop=394 nonunicast_drop=508 firstpkt_queued=6
+2026-09-21 22:38:11,535 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5485 tun_tx=8619 colr_tx=4589 colr_rx=8625 tunnel_up=6 sid_hit=4583 nonipv4_drop=394 nonunicast_drop=508 firstpkt_queued=6
+2026-09-21 22:38:16,575 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5486 tun_tx=8619 colr_tx=4590 colr_rx=8625 tunnel_up=6 sid_hit=4584 nonipv4_drop=394 nonunicast_drop=508 firstpkt_queued=6
+2026-09-21 22:38:26,685 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5487 tun_tx=8619 colr_tx=4591 colr_rx=8625 tunnel_up=6 sid_hit=4585 nonipv4_drop=394 nonunicast_drop=508 firstpkt_queued=6
+2026-09-21 22:39:27,142 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5515 tun_tx=8619 colr_tx=4591 colr_rx=8625 tunnel_up=6 sid_hit=4585 nonipv4_drop=408 nonunicast_drop=522 firstpkt_queued=6
+2026-09-21 22:39:32,189 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5517 tun_tx=8619 colr_tx=4593 colr_rx=8625 tunnel_up=6 sid_hit=4587 nonipv4_drop=408 nonunicast_drop=522 firstpkt_queued=6
+2026-09-21 22:39:37,240 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5519 tun_tx=8619 colr_tx=4595 colr_rx=8625 tunnel_up=6 sid_hit=4589 nonipv4_drop=408 nonunicast_drop=522 firstpkt_queued=6
+2026-09-21 22:39:47,283 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5520 tun_tx=8619 colr_tx=4596 colr_rx=8625 tunnel_up=6 sid_hit=4590 nonipv4_drop=408 nonunicast_drop=522 firstpkt_queued=6
+2026-09-21 22:40:52,678 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5542 tun_tx=8619 colr_tx=4596 colr_rx=8625 tunnel_up=6 sid_hit=4590 nonipv4_drop=418 nonunicast_drop=534 firstpkt_queued=6
+2026-09-21 22:40:57,720 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5543 tun_tx=8619 colr_tx=4596 colr_rx=8625 tunnel_up=6 sid_hit=4590 nonipv4_drop=418 nonunicast_drop=535 firstpkt_queued=6
+2026-09-21 22:41:02,769 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5545 tun_tx=8619 colr_tx=4596 colr_rx=8625 tunnel_up=6 sid_hit=4590 nonipv4_drop=418 nonunicast_drop=537 firstpkt_queued=6
+2026-09-21 22:41:07,795 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5546 tun_tx=8619 colr_tx=4596 colr_rx=8625 tunnel_up=6 sid_hit=4590 nonipv4_drop=418 nonunicast_drop=538 firstpkt_queued=6
+2026-09-21 22:44:44,273 INFO colorproxy.l3.service: [L3/消费端 计数器] tun_rx=5549 tun_tx=8619 colr_tx=4596 colr_rx=8625 tunnel_up=6 sid_hit=4590 nonipv4_drop=418 nonunicast_drop=541 firstpkt_queued=6
