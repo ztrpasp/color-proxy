@@ -71,18 +71,18 @@ class _Sender(threading.Thread):
         self._media = bytes(range(256)) * ((payload_len - RTP_HEADER_LEN) // 256 + 1)
         self._media = self._media[: payload_len - RTP_HEADER_LEN]
         self._seconds = seconds
-        self._stop = threading.Event()
+        self._stop_event = threading.Event()
         self.sent = 0
 
     def stop(self) -> None:
-        self._stop.set()
+        self._stop_event.set()
 
     def run(self) -> None:
         seq = 0
         ssrc = 0x0C01C0DE  # 固定 SSRC，抓包时一眼认出是本脚本的流
         started = time.monotonic()
         next_at = started
-        while not self._stop.is_set():
+        while not self._stop_event.is_set():
             if self._seconds and time.monotonic() - started >= self._seconds:
                 break
             # RTP 头：V=2 P=0 X=0 CC=0 | M=0 PT=96(动态) | seq | timestamp | ssrc

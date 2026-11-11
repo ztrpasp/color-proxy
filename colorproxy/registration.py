@@ -69,7 +69,7 @@ class RegistrationKeeper(threading.Thread):
         self._on_refresh = on_refresh
         self._refresh_sec = refresh_sec
         self._retry_sec = retry_sec
-        self._stop = threading.Event()
+        self._stop_event = threading.Event()
         self._first_round_done = threading.Event()
         #: 已发出的注册报文数，注册失败时的诊断要用（见 failure_hint）
         self.attempts = 0
@@ -89,12 +89,12 @@ class RegistrationKeeper(threading.Thread):
     def run(self) -> None:
         # 阶段一：首次注册。收到 RM 同步(tag=6) 前一直重试；发满 REGISTER_MAX_RETRIES
         # 次就放行 wait_first，让调用方按原语义判失败（线程自己继续重试）。
-        while not self._stop.is_set() and not self._state.registered.is_set():
+        while not self._stop_event.is_set() and not self._state.registered.is_set():
             self._send_register()
             self._state.registered.wait(self._retry_sec)
             if self.attempts >= REGISTER_MAX_RETRIES:
                 self._first_round_done.set()
-        if self._stop.is_set():
+        if self._stop_event.is_set():
             self._first_round_done.set()
             return
 
@@ -109,12 +109,12 @@ class RegistrationKeeper(threading.Thread):
                 self.attempts,
             )
             return
-        while not self._stop.wait(self._refresh_sec):
+        while not self._stop_event.wait(self._refresh_sec):
             self._send_register()
             self._run_callback(self._on_refresh, "刷新服务")
 
     def stop(self) -> None:
-        self._stop.set()
+        self._stop_event.set()
 
     def _run_callback(self, callback: Callable[[], None] | None, label: str) -> None:
         if callback is None:

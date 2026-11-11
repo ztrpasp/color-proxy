@@ -77,14 +77,14 @@ class TunPump(threading.Thread):
         self._tun = tun
         self._handler = handler
         self._poll_sec = poll_sec
-        self._stop = threading.Event()
+        self._stop_event = threading.Event()
 
     def run(self) -> None:
-        while not self._stop.is_set():
+        while not self._stop_event.is_set():
             try:
                 packet = self._tun.read(timeout=self._poll_sec)
             except OSError as exc:
-                if self._stop.is_set():
+                if self._stop_event.is_set():
                     break  # close() 期间的 ERROR_HANDLE_EOF，正常退出
                 logger.error("tun 读失败，读线程退出：%s", exc)
                 break
@@ -96,7 +96,7 @@ class TunPump(threading.Thread):
                 logger.exception("处理 tun 包时发生异常（已忽略该包）")
 
     def stop(self) -> None:
-        self._stop.set()
+        self._stop_event.set()
 
 
 class Ticker(threading.Thread):
@@ -111,10 +111,10 @@ class Ticker(threading.Thread):
         super().__init__(name=name, daemon=True)
         self._interval = interval_sec
         self._tasks = list(tasks)
-        self._stop = threading.Event()
+        self._stop_event = threading.Event()
 
     def run(self) -> None:
-        while not self._stop.wait(self._interval):
+        while not self._stop_event.wait(self._interval):
             for task in self._tasks:
                 try:
                     task()
@@ -123,7 +123,7 @@ class Ticker(threading.Thread):
                                      getattr(task, "__name__", task))
 
     def stop(self) -> None:
-        self._stop.set()
+        self._stop_event.set()
 
 
 class _CounterLog:

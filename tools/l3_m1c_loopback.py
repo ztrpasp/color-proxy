@@ -237,11 +237,11 @@ class UdpColorReceiver(threading.Thread):
         self._sock.settimeout(0.5)
         self._sock.bind(("127.0.0.1", port) if port else ("", 0))
         self._on_payload = on_payload
-        self._stop = threading.Event()
+        self._stop_event = threading.Event()
         self.received = 0
 
     def run(self) -> None:
-        while not self._stop.is_set():
+        while not self._stop_event.is_set():
             try:
                 payload, _ = self._sock.recvfrom(65535)
             except (TimeoutError, socket.timeout):
@@ -255,7 +255,7 @@ class UdpColorReceiver(threading.Thread):
                 logger.exception("处理 CoLoR 报文时异常（已忽略该包）")
 
     def stop(self) -> None:
-        self._stop.set()
+        self._stop_event.set()
         self._sock.close()
 
 
