@@ -1,12 +1,13 @@
 """按平台打开 tun 设备（docs/design-l3-v2.md §10.2 的启动顺序）。
 
-装配层只调 ``open_tun()``，**不直接 import ``device_win``**。两个好处：
+装配层只调 ``open_tun()``，**不直接 import ``device_win`` / ``device_linux``**。两个好处：
 
 1. 离线测试可以往 ``ProviderL3Service`` / ``ConsumerL3Service`` 注入 ``LoopbackTun``，
    整条装配路径（分派、读线程、计数器、超时回收）都能在没有管理员权限、没有
    wintun.dll 的机器上跑；
-2. Linux 移植时只在这里加一个分支，``l3/`` 与 ``tun/ipv4.py`` / ``tun/mss.py`` 全部
-   不动（Wintun 与 ``/dev/net/tun`` 语义一致：纯 L3、无以太头）。
+2. 平台差异只在这里分支：Windows 用 Wintun（``device_win``），Linux 用
+   ``/dev/net/tun``（``device_linux``）。``l3/`` 与 ``tun/ipv4.py`` / ``tun/mss.py`` 全部
+   共用（两者语义一致：纯 L3、无以太头）。
 
 启动顺序按 §10.2：创建适配器 → 配地址/MTU → 配路由 → （提供端）确认弱主机开关 →
 放行防火墙 → 再开始收发。本函数负责前三步；弱主机开关按 §9.1 只检查告警，见
@@ -36,16 +37,19 @@ def open_tun(
     ``routes`` 是要指向本设备的网段：消费端传 ``capture_routes``（只允许 /32，
     §2.4 第 1 条，已由配置加载强制），提供端传 ``peer_routes``。
     """
-    if sys.platform != "win32":
+    if sys.platform == "win32":
+        from .device_win import WintunDevice  # 延迟导入：非 Windows 上 import 即失败
+
+        device = WintunDevice(name=name, mtu=mtu)
+    elif sys.platform.startswith("linux"):
+        from .device_linux import LinuxTunDevice
+
+        device = LinuxTunDevice(name=name, mtu=mtu)
+    else:
         raise RuntimeError(
-            f"L3 隧道模式目前只实现了 Windows(Wintun)，当前平台是 {sys.platform}。"
-            "Linux 侧请补 colorproxy/tun/device_linux.py（/dev/net/tun + "
-            "TUNSETIFF|IFF_TUN|IFF_NO_PI），其余代码可原样共用（§10.2）"
+            f"L3 隧道模式只实现了 Windows(Wintun) 与 Linux(/dev/net/tun)，当前平台是 {sys.platform}"
         )
 
-    from .device_win import WintunDevice  # 延迟导入：非 Windows 上 import 即失败
-
-    device = WintunDevice(name=name, mtu=mtu)
     device.open()
     try:
         device.configure(ip, mask)
