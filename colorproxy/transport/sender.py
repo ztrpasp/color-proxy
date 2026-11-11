@@ -10,7 +10,7 @@ import threading
 from typing import Union
 
 from scapy.layers.inet import IP
-from scapy.layers.l2 import Ether
+from scapy.layers.l2 import Ether, getmacbyip
 from scapy.packet import Packet, Raw
 from scapy.sendrecv import sendp
 
@@ -54,9 +54,12 @@ class ColorSender:
     def _resolve(self, dst_ip: str) -> tuple[str, str]:
         with self._lock:
             if dst_ip not in self._cache:
-                template = Ether() / IP(dst=dst_ip, proto=IP_PROTO_COLOR)
-                mac = template[Ether].dst
-                iface = IP(dst=dst_ip).route()[0]
+                # 显式解析下一跳的 MAC：scapy 2.8 起 Ether().dst 推迟到组帧时才解析，
+                # 读出来是 None，缓存就失效了（每次发包都重新解析，ARP 缓存过期时还会
+                # 阻塞一次），解析失败时的广播告警也永远不会触发
+                iface, _src, gateway = IP(dst=dst_ip).route()
+                next_hop = gateway if gateway and gateway != "0.0.0.0" else dst_ip
+                mac = getmacbyip(next_hop) or _BROADCAST_MAC
                 self._cache[dst_ip] = (mac, iface)
                 self._log_resolution(dst_ip, mac, iface)
             return self._cache[dst_ip]
